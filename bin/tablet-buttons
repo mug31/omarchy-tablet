@@ -1,8 +1,10 @@
 #!/usr/bin/python3
 """Button remapper for Wacom tablets on the kernel wacom driver.
 
-Runs as the tablet-buttons user service. Reads the "buttons" section of
+Started by the bar panel (one per monitor bar, so the copies take turns:
+the first holds a lock and the rest wait on it, ready to take over). Reads
 ~/.config/omarchy/tablet.json and re-reads it whenever the file changes.
+Logs to ~/.cache/omarchy-tablet/tablet-buttons.log.
 
 Pad: left alone while every ExpressKey is on "default", so apps such as
 Krita see them as usual. Otherwise the pad is grabbed and its keys turned into
@@ -27,8 +29,11 @@ Every press is also written to ~/.cache/omarchy-tablet/last-button so the
 bar panel can light up the button that was pressed.
 """
 import asyncio
+import ctypes
+import fcntl
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -39,7 +44,12 @@ from evio import Device, UInput, ecodes as e  # noqa: E402
 
 HOME = os.path.expanduser("~")
 STATE = os.path.join(HOME, ".config/omarchy/tablet.json")
-LAST = os.path.join(HOME, ".cache/omarchy-tablet/last-button")
+CACHE = os.path.join(HOME, ".cache/omarchy-tablet")
+LAST = os.path.join(CACHE, "last-button")
+LOCK = os.path.join(CACHE, "tablet-buttons.lock")
+LOG = os.path.join(CACHE, "tablet-buttons.log")
+# Where 0.1-0.3 ran this as a systemd user service.
+SERVICE = os.path.join(HOME, ".config/systemd/user/tablet-buttons.service")
 # Present while the panel's "Identify keys" runs: presses are reported, not acted on.
 IDENTIFY = os.path.join(HOME, ".cache/omarchy-tablet/identify")
 
@@ -431,7 +441,38 @@ async def main():
         await asyncio.sleep(1)
 
 
+def retire_service():
+    """0.3 and earlier ran this as a systemd user service; the panel runs it now."""
+    if not os.path.exists(SERVICE):
+        return
+    subprocess.run(["systemctl", "--user", "disable", "--now", "tablet-buttons.service"], capture_output=True)
+    try:
+        os.replace(SERVICE, SERVICE + ".bak")
+    except OSError:
+        pass  # another bar's copy got there first
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+
+
+def take_lock():
+    """Block until no other copy runs, then hold the lock for good."""
+    os.makedirs(CACHE, exist_ok=True)
+    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
 if __name__ == "__main__":
+    # The panel passes --panel. (INVOCATION_ID can't tell: the shell itself
+    # runs inside a systemd unit and passes it on.)
+    panel = "--panel" in sys.argv
+    if panel:
+        # Quit with the shell instead of lingering on with the lock.
+        ctypes.CDLL(None).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+        retire_service()
+    lock = take_lock()
+    if panel:
+        sys.stderr = open(LOG, "w", buffering=1)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

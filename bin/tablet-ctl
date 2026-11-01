@@ -9,12 +9,13 @@ Settings live in ~/.config/omarchy/tablet.json; every change regenerates
   tablet-ctl reset                  -> restore defaults
   tablet-ctl toggle <key>           -> flip an on/off setting, e.g. fingerEnabled
                                        (handy as a button command)
-  tablet-ctl setup                  -> one-time install: tablet.lua, hyprland.lua
-                                       require line, tablet-buttons user service
+  tablet-ctl setup                  -> one-time install: tablet.lua and the
+                                       hyprland.lua require line
   tablet-ctl unlatch                -> (internal) clear libinput's pen/touch rotation
                                        latch once the pen is out of proximity
 """
 import time
+import fcntl
 import json
 import os
 import subprocess
@@ -28,8 +29,8 @@ STATE = os.path.join(HOME, ".config/omarchy/tablet.json")
 LUA = os.path.join(HOME, ".config/hypr/tablet.lua")
 HYPRLAND = os.path.join(HOME, ".config/hypr/hyprland.lua")
 REQUIRE = 'require("hypr.tablet")'
-SERVICE = os.path.join(HOME, ".config/systemd/user/tablet-buttons.service")
-PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+# Held by the running tablet-buttons (the panel starts it).
+DAEMON_LOCK = os.path.join(HOME, ".cache/omarchy-tablet/tablet-buttons.lock")
 
 FALLBACK_MM = [147.2, 92.0]
 
@@ -301,8 +302,18 @@ def hyprland_wired():
         return False
 
 
-def service_active():
-    return subprocess.run(["systemctl", "--user", "is-active", "--quiet", "tablet-buttons"]).returncode == 0
+def daemon_running():
+    try:
+        fd = os.open(DAEMON_LOCK, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
 
 
 def input_access(tablet):
@@ -329,24 +340,6 @@ def setup(s):
         with open(HYPRLAND, "w") as f:
             f.write(text)
         subprocess.run(["hyprctl", "reload"], capture_output=True, timeout=10)
-    os.makedirs(os.path.dirname(SERVICE), exist_ok=True)
-    with open(SERVICE, "w") as f:
-        f.write(f"""[Unit]
-Description=Wacom tablet button remapper (Omarchy Wacom Bamboo widget)
-PartOf=graphical-session.target
-After=graphical-session.target
-
-[Service]
-ExecStart=/usr/bin/python3 {PLUGIN_DIR}/bin/tablet-buttons
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=graphical-session.target
-""")
-    subprocess.run(["systemctl", "--user", "daemon-reload"])
-    subprocess.run(["systemctl", "--user", "enable", "tablet-buttons.service"], capture_output=True)
-    subprocess.run(["systemctl", "--user", "restart", "tablet-buttons.service"])
     return error
 
 
@@ -365,8 +358,8 @@ def status(s, error=""):
         "tablet": desc,
         "pen": bool(desc and desc["hasPen"]) and (desc["penName"] in tablet_names or desc["penName"] + "-remap" in tablet_names),
         "finger": bool(desc and desc["hasTouch"]),
-        "buttonsService": service_active(),
-        "setupDone": hyprland_wired() and os.path.exists(LUA) and os.path.exists(SERVICE),
+        "buttonsService": daemon_running(),
+        "setupDone": hyprland_wired() and os.path.exists(LUA),
         "inputAccess": input_access(tablet),
         "wacomDriver": os.path.isdir("/sys/module/wacom"),
         "monitors": [{"name": m["name"], "description": m["description"]} for m in mons],

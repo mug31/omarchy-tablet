@@ -7,8 +7,9 @@ import qs.Ui
 // Wacom tablet settings. Every control sends a patch to
 // bin/tablet-ctl, which rewrites ~/.config/hypr/tablet.lua and reloads
 // Hyprland, so changes take effect immediately and survive a reboot.
-// Button mappings are picked up by the tablet-buttons user service
-// (bin/tablet-buttons), which watches the same settings file.
+// Button mappings and quarter turns are applied by bin/tablet-buttons, which
+// this panel keeps running and which watches the same settings file. Every
+// bar starts one; they share a lock, so only one is active at a time.
 Panel {
   id: root
   moduleName: "io.github.mug31.wacom-bamboo"
@@ -210,6 +211,14 @@ Panel {
   Component.onCompleted: refresh()
 
   Process {
+    id: daemonProc
+    command: ["/usr/bin/python3", root.pluginDir + "/bin/tablet-buttons", "--panel"]
+    running: true
+    onExited: daemonRestart.start()
+  }
+  Timer { id: daemonRestart; interval: 3000; onTriggered: daemonProc.running = true }
+
+  Process {
     id: statusProc
     command: [root.helper, "status"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyStatus(text) }
@@ -382,7 +391,7 @@ Panel {
             width: parent.width
             text: !root.wacomDriver
               ? "The kernel wacom driver isn't loaded, so the tablet can't be seen. OpenTabletDriver blocks it; see the plugin README."
-              : "One-time setup: adds hypr/tablet.lua to your Hyprland config and starts the tablet-buttons service."
+              : "One-time setup: adds hypr/tablet.lua to your Hyprland config."
             color: root.fg
             font.family: root.uiFont
             font.pixelSize: Style.font.caption
@@ -472,7 +481,7 @@ Panel {
               : root.rotation_ === 0
                 ? "Left-handed? Turn the tablet around and pick Flipped."
                 : !root.buttonsService || !root.inputAccess
-                  ? "Portrait needs the tablet-buttons service to turn the pen" + (root.hasTouch ? " and touch" : "") + ", and it isn't running."
+                  ? "Portrait needs the button helper to turn the pen" + (root.hasTouch ? " and touch" : "") + ", and it isn't running."
                   : "Portrait: pen" + (root.hasTouch ? ", touch" : "") + " and the key order all turn with the tablet."
             color: root.dim
             font.family: root.uiFont
@@ -600,7 +609,7 @@ Panel {
               ? "Your user can't read the tablet's input devices, so mappings won't apply. Add yourself to the input group (sudo usermod -aG input $USER), then log out and back in."
               : root.buttonsService
                 ? "Press any pen or tablet button: its picture and row light up. App default leaves a button to the app you're in (Krita, Rnote…)."
-                : "The tablet-buttons service is not running, so mappings won't apply. Start it with: systemctl --user start tablet-buttons"
+                : "The button helper (bin/tablet-buttons) isn't running, so mappings won't apply. See ~/.cache/omarchy-tablet/tablet-buttons.log"
             color: root.buttonsService && root.inputAccess ? root.dim : Color.urgent
             font.family: root.uiFont
             font.pixelSize: Style.font.caption
