@@ -13,8 +13,8 @@ and what every pen and tablet button does.
   a scale preview, crop to the display's aspect ratio so circles stay round,
   pressure sensitivity.
 - **Orientation** – *Flipped* turns the pen, finger touch and the key order
-  around for left-handed use (libinput's left-handed mode). 90° and 270° turn
-  the pen only.
+  around for left-handed use. *90°* and *270°* hold the tablet portrait: pen,
+  finger touch and key order all turn with it, and palm rejection keeps working.
 - **Touch** – finger touch on/off (handy while drawing), pointer speed, tap to
   click, natural scrolling.
 - **Buttons** – remap the pen side buttons and the ExpressKeys to a click, a
@@ -73,7 +73,7 @@ Touch rings and strips on pads are not handled.
   sudo modprobe wacom                                          # then replug the tablet
   ```
 
-- `python-evdev` for button remapping: `omarchy pkg add python-evdev`.
+Nothing else to install: the widget only uses Python's standard library.
 
 ## Install
 
@@ -81,13 +81,21 @@ Touch rings and strips on pads are not handled.
 omarchy plugin add https://github.com/mug31/omarchy-tablet.git --enable
 ```
 
-Open the pencil icon in the bar and press **Finish setup** once. Setup:
+That's it: there is no setup step and the Hyprland config is never edited.
 
-1. writes `~/.config/hypr/tablet.lua` and adds `require("hypr.tablet")` to
-   `~/.config/hypr/hyprland.lua` (after `require("hypr.input")`);
-2. installs and starts the `tablet-buttons` systemd user service.
+**Button remapping and portrait** need to grab the tablet and create virtual
+input devices, which a stock Omarchy keeps to root. If so, the panel shows
+**Enable**: it asks for your password once (pkexec) and installs
+`/etc/udev/rules.d/70-omarchy-wacom-bamboo.rules`, which gives the logged-in
+user access to `/dev/uinput` and to Wacom tablets only. It takes effect
+straight away, without logging out.
 
-Updating from 0.1: button mappings are carried over automatically.
+**Updating from 0.3 or older** happens on its own the first time the bar
+loads 0.4: the `require("hypr.tablet")` line is removed from
+`hyprland.lua` (the old file is kept as `hyprland.lua.wacom-bamboo.bak`),
+`tablet.lua` becomes `tablet.lua.bak`, and the `tablet-buttons` systemd
+service is stopped and its unit kept as `tablet-buttons.service.bak`.
+Settings and button mappings carry over.
 
 ## How it works
 
@@ -95,10 +103,9 @@ Updating from 0.1: button mappings are carried over automatically.
 |---|---|
 | `Panel.qml` | The bar icon and panel. Every change is sent to `bin/tablet-ctl`. |
 | `bin/tabletlib.py` | Finds the tablet in `/proc/bus/input/devices` and reads its libwacom entry and layout. |
-| `bin/tablet-ctl` | Saves settings to `~/.config/omarchy/tablet.json`, generates `~/.config/hypr/tablet.lua`, reloads Hyprland. |
-| `bin/tablet-buttons` | User service. While any ExpressKey is remapped it grabs the pad and runs the actions through a virtual keyboard and mouse; keys left on App default are replayed through a virtual pad of the same name, so apps still see them. With every key on App default the pad isn't touched. The pen is only grabbed while a side button is remapped; it is then replayed through a virtual clone (`… Pen Remap`), so pressure and tilt keep working. |
-
-`tablet.lua` is generated: change settings from the panel, not by hand.
+| `bin/tablet-ctl` | Saves settings to `~/.config/omarchy/tablet.json` and sends them to Hyprland with `hyprctl eval`. |
+| `bin/tablet-buttons` | Helper the panel keeps running (one per session; extra bars wait their turn). Re-applies the settings when the session starts, the tablet is plugged in, Hyprland reloads its config or a monitor changes. While any ExpressKey is remapped it grabs the pad and runs the actions through a virtual keyboard and mouse; keys left on App default are replayed through a virtual pad of the same name, so apps still see them. The pen is grabbed while a side button is remapped or the tablet is portrait, and replayed through a virtual clone (`… Pen Remap`) so pressure and tilt keep working; in portrait the finger touch is replayed turned (`… Finger Rotated`). Log: `~/.cache/omarchy-tablet/tablet-buttons.log`. |
+| `bin/evio.py` | Minimal evdev/uinput access (reading, grabbing, virtual devices) from the standard library. |
 
 `bin/tablet-ctl toggle fingerEnabled` flips finger touch on or off with a
 notification, so it can go on a tablet button or a Hyprland keybinding.
@@ -106,12 +113,13 @@ notification, so it can go on a tablet button or a Hyprland keybinding.
 ## Uninstall
 
 ```bash
-systemctl --user disable --now tablet-buttons.service
-rm ~/.config/systemd/user/tablet-buttons.service
-sed -i '/require("hypr.tablet")/d' ~/.config/hypr/hyprland.lua
-rm ~/.config/hypr/tablet.lua ~/.config/omarchy/tablet.json
 omarchy plugin remove io.github.mug31.wacom-bamboo
+rm ~/.config/omarchy/tablet.json                            # saved settings
+sudo rm /etc/udev/rules.d/70-omarchy-wacom-bamboo.rules     # only if you pressed Enable
 ```
+
+The settings were only ever applied at runtime, so they are gone after the
+next Hyprland reload or login.
 
 ## License
 
