@@ -230,6 +230,12 @@ Panel {
   }
 
   Process {
+    id: enableProc
+    command: [root.helper, "enable-access"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyStatus(text) }
+  }
+
+  Process {
     id: resetProc
     command: [root.helper, "reset"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyStatus(text) }
@@ -453,7 +459,9 @@ Panel {
               ? "Flipped for left-handed use: pen" + (root.hasTouch ? ", touch" : "") + " and the key order all turn around."
               : root.rotation_ === 0
                 ? "Left-handed? Turn the tablet around and pick Flipped."
-                : !root.buttonsService || !root.inputAccess
+                : !root.inputAccess
+                  ? "Portrait needs access to the tablet to turn the pen" + (root.hasTouch ? " and touch" : "") + ": press Enable."
+                  : !root.buttonsService
                   ? "Portrait needs the button helper to turn the pen" + (root.hasTouch ? " and touch" : "") + ", and it isn't running."
                   : "Portrait: pen" + (root.hasTouch ? ", touch" : "") + " and the key order all turn with the tablet."
             color: root.dim
@@ -461,6 +469,7 @@ Panel {
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
           }
+          EnableAccessButton { visible: !root.inputAccess && (root.rotation_ === 90 || root.rotation_ === 270) }
 
           SliderRow {
             title: "ACTIVE AREA"
@@ -579,7 +588,7 @@ Panel {
           Text {
             width: parent.width
             text: !root.inputAccess
-              ? "Your user can't read the tablet's input devices, so mappings won't apply. Add yourself to the input group (sudo usermod -aG input $USER), then log out and back in."
+              ? "Button remapping and portrait need access to the tablet and to virtual input devices, which Omarchy keeps to root. Enable installs a small udev rule for that (asks for your password once)."
               : root.buttonsService
                 ? "Press any pen or tablet button: its picture and row light up. App default leaves a button to the app you're in (Krita, Rnote…)."
                 : "The button helper (bin/tablet-buttons) isn't running, so mappings won't apply. See ~/.cache/omarchy-tablet/tablet-buttons.log"
@@ -588,6 +597,7 @@ Panel {
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
           }
+          EnableAccessButton {}
 
           Header { visible: root.penButtons.length > 0; text: "PEN SIDE BUTTONS" }
           PenDiagram { visible: root.penButtons.length > 0; width: parent.width }
@@ -1119,6 +1129,19 @@ Panel {
   // turned to match the chosen orientation. Key numbers are positions as the
   // tablet is held (1 = top/leftmost); a key lights up when pressed and the one
   // "Identify keys" is waiting for is outlined in the accent colour.
+  // Shown while tablet-buttons lacks access to the tablet or /dev/uinput.
+  component EnableAccessButton: Button {
+    visible: !root.inputAccess
+    anchors.right: parent.right
+    text: enableProc.running ? "Waiting for password…" : "Enable"
+    iconText: "\uf023"
+    bordered: true
+    foreground: root.fg
+    fontFamily: root.uiFont
+    fontSize: Style.font.bodySmall
+    onClicked: if (!enableProc.running) enableProc.running = true
+  }
+
   component TabletDiagram: Item {
     id: tabletDiagram
 

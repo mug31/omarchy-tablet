@@ -12,6 +12,8 @@ running, runs `tablet-ctl apply` again after every reload.
   tablet-ctl toggle <key>           -> flip an on/off setting, e.g. fingerEnabled
                                        (handy as a button command)
   tablet-ctl apply                  -> send the settings to Hyprland again
+  tablet-ctl enable-access          -> ask (pkexec) to install a udev rule giving the
+                                       logged-in user the tablet and /dev/uinput
   tablet-ctl unlatch                -> (internal) clear libinput's pen/touch rotation
                                        latch once the pen is out of proximity
 """
@@ -333,11 +335,37 @@ def daemon_running():
         os.close(fd)
 
 
+# Stock Omarchy keeps /dev/input/event* to the input group and /dev/uinput to
+# root. Tagging the Wacom devices and uinput "uaccess" lets the user at the
+# seat use them, from the moment the rule is triggered (no group, no re-login).
+UDEV_RULE = "/etc/udev/rules.d/70-omarchy-wacom-bamboo.rules"
+UDEV_RULE_TEXT = """\
+# Omarchy Wacom Bamboo plugin: lets the logged-in user remap tablet buttons
+# and turn the tablet (tablet-buttons grabs the tablet and creates virtual
+# devices through uinput). Delete this file to undo.
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"
+""" + "".join(f'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{{id/vendor}}=="{v}", TAG+="uaccess"\n'
+              for v in sorted(tabletlib.WACOM_VENDORS))
+
+
 def input_access(tablet):
-    """False when the tablet's event devices can't be read: the user isn't in
-    the input group, so remapping and quarter turns can't work."""
+    """False when tablet-buttons can't do its job: the tablet's event devices
+    can't be read or /dev/uinput can't be written."""
     paths = [d["path"] for d in (tablet.get("pen"), tablet.get("pad"), tablet.get("finger")) if d] if tablet else []
-    return all(os.access(p, os.R_OK | os.W_OK) for p in paths)
+    return all(os.access(p, os.R_OK) for p in paths) and os.access("/dev/uinput", os.W_OK)
+
+
+def enable_access():
+    """Install UDEV_RULE through pkexec and apply it to the devices already plugged in."""
+    script = (f"cat > {UDEV_RULE} <<'EOF'\n{UDEV_RULE_TEXT}EOF\n"
+              "udevadm control --reload\n"
+              "udevadm trigger --action=change --subsystem-match=misc --sysname-match=uinput\n"
+              "udevadm trigger --action=change --subsystem-match=input\n"
+              "udevadm settle --timeout=5\n")
+    out = subprocess.run(["pkexec", "/bin/sh", "-c", script], capture_output=True, text=True)
+    if out.returncode in (126, 127):
+        return "Not enabled: the password prompt was dismissed."
+    return "" if out.returncode == 0 else (out.stderr.strip() or f"pkexec exited with {out.returncode}")
 
 
 def status(s, error=""):
@@ -410,6 +438,8 @@ def main():
         keep = {"slotCodes": s["slotCodes"], "lastDevice": s["lastDevice"]}
         s = sanitize({**DEFAULTS, **keep})
         error = write(s)
+    elif cmd == "enable-access":
+        error = enable_access()
     elif cmd == "apply":
         tablet, desc = current_tablet(s)
         if desc and remember(dict(s), desc)["lastDevice"] != s["lastDevice"]:

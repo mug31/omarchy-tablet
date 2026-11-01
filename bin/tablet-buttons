@@ -438,12 +438,7 @@ async def watch_hyprland():
 
 
 async def main():
-    try:
-        out = Outputs()
-    except OSError as exc:
-        # No access to /dev/uinput: settings still get applied, remapping can't work.
-        log("cannot create virtual devices:", exc)
-        out = None
+    out = None
     watcher = asyncio.create_task(watch_hyprland())  # noqa: F841  (kept alive for good)
     tasks = []
     signature = None
@@ -452,7 +447,16 @@ async def main():
         pen_path = tablet["pen"]["path"] if tablet and tablet.get("pen") else None
         pad_path = tablet["pad"]["path"] if tablet and tablet.get("pad") else None
         finger_path = tablet["finger"]["path"] if tablet and tablet.get("finger") else None
-        current = (state_mtime(), pen_path, pad_path, finger_path)
+        if out is None:
+            # Until the panel's Enable grants /dev/uinput, settings still get
+            # applied but nothing can be remapped or turned; keep trying.
+            try:
+                out = Outputs()
+            except OSError as exc:
+                if signature is None:
+                    log("cannot create virtual devices:", exc)
+        readable = all(os.access(p, os.R_OK) for p in (pen_path, pad_path, finger_path) if p)
+        current = (state_mtime(), pen_path, pad_path, finger_path, out is not None, readable)
         alive = all(not t.done() for t in tasks)
         for t in tasks:
             if t.done() and not t.cancelled() and t.exception() and not isinstance(t.exception(), OSError):
@@ -469,7 +473,7 @@ async def main():
             if tablet:
                 key = f'{tablet["vendor"]}:{tablet["product"]}'
                 buttons = tabletlib.resolve_buttons(saved, tabletlib.describe(tablet, 0, slot_codes.get(key)))
-            if current[1:] != (signature or (None,) * 4)[1:]:
+            if current[1:4] != (signature or (None,) * 4)[1:4]:
                 await apply_settings("tablet seen")  # plugged in, or first run
             pad, pen = (open_device(pad_path), open_device(pen_path)) if out else (None, None)
             finger = open_device(finger_path) if out and rotation in (90, 270) else None
