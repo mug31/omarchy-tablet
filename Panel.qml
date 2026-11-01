@@ -5,11 +5,12 @@ import qs.Commons
 import qs.Ui
 
 // Wacom tablet settings. Every control sends a patch to
-// bin/tablet-ctl, which rewrites ~/.config/hypr/tablet.lua and reloads
-// Hyprland, so changes take effect immediately and survive a reboot.
+// bin/tablet-ctl, which saves it and hands it to Hyprland with hyprctl eval,
+// so changes take effect at once without touching the Hyprland config.
 // Button mappings and quarter turns are applied by bin/tablet-buttons, which
-// this panel keeps running and which watches the same settings file. Every
-// bar starts one; they share a lock, so only one is active at a time.
+// this panel keeps running and which watches the same settings file and
+// re-applies it after every Hyprland reload. Every bar starts one; they share
+// a lock, so only one is active at a time.
 Panel {
   id: root
   moduleName: "io.github.mug31.wacom-bamboo"
@@ -22,7 +23,6 @@ Panel {
   property bool penPresent: false
   property bool fingerPresent: false
   property bool buttonsService: true
-  property bool setupDone: true
   property bool inputAccess: true
   property bool wacomDriver: true
   property string error: ""
@@ -143,7 +143,6 @@ Panel {
     penPresent = !!data.pen
     fingerPresent = !!data.finger
     buttonsService = data.buttonsService !== false
-    setupDone = data.setupDone !== false
     inputAccess = data.inputAccess !== false
     wacomDriver = data.wacomDriver !== false
     error = data.error || ""
@@ -231,12 +230,6 @@ Panel {
   }
 
   Process {
-    id: setupProc
-    command: [root.helper, "setup"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyStatus(text) }
-  }
-
-  Process {
     id: resetProc
     command: [root.helper, "reset"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyStatus(text) }
@@ -314,8 +307,8 @@ Panel {
   // Plugging or unplugging the tablet is noticed on the next tick.
   Timer { interval: root.opened ? 3000 : 15000; running: true; repeat: true; onTriggered: root.refresh() }
 
-  // Hidden while no tablet is plugged in, unless setup still needs the panel.
-  visible: root.connected || !root.setupDone || !root.wacomDriver
+  // Hidden while no tablet is plugged in, unless the driver notice needs the panel.
+  visible: root.connected || !root.wacomDriver
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -381,34 +374,14 @@ Panel {
           }
         }
 
-        // First run / missing pieces.
-        Column {
-          visible: !root.setupDone || !root.wacomDriver
+        Text {
+          visible: !root.wacomDriver
           width: parent.width
-          spacing: Style.space(8)
-
-          Text {
-            width: parent.width
-            text: !root.wacomDriver
-              ? "The kernel wacom driver isn't loaded, so the tablet can't be seen. OpenTabletDriver blocks it; see the plugin README."
-              : "One-time setup: adds hypr/tablet.lua to your Hyprland config."
-            color: root.fg
-            font.family: root.uiFont
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-
-          Button {
-            visible: !root.setupDone
-            anchors.right: parent.right
-            text: setupProc.running ? "Setting up…" : "Finish setup"
-            iconText: "\uf0ad"
-            bordered: true
-            foreground: root.fg
-            fontFamily: root.uiFont
-            fontSize: Style.font.bodySmall
-            onClicked: if (!setupProc.running) setupProc.running = true
-          }
+          text: "The kernel wacom driver isn't loaded, so the tablet can't be seen. OpenTabletDriver blocks it; see the plugin README."
+          color: root.fg
+          font.family: root.uiFont
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
         }
 
         Text {

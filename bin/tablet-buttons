@@ -6,6 +6,11 @@ the first holds a lock and the rest wait on it, ready to take over). Reads
 ~/.config/omarchy/tablet.json and re-reads it whenever the file changes.
 Logs to ~/.cache/omarchy-tablet/tablet-buttons.log.
 
+Settings: the panel sends them to Hyprland with `hyprctl eval`, which only
+lasts until Hyprland reloads its config. This daemon runs `tablet-ctl apply`
+when it starts, when the tablet appears and after every config reload or
+monitor change (the active area follows the monitor's shape).
+
 Pad: left alone while every ExpressKey is on "default", so apps such as
 Krita see them as usual. Otherwise the pad is grabbed and its keys turned into
 clicks, shortcuts or commands; keys still on "default" are replayed through a
@@ -50,6 +55,7 @@ LOCK = os.path.join(CACHE, "tablet-buttons.lock")
 LOG = os.path.join(CACHE, "tablet-buttons.log")
 # Where 0.1-0.3 ran this as a systemd user service.
 SERVICE = os.path.join(HOME, ".config/systemd/user/tablet-buttons.service")
+TABLET_CTL = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tablet-ctl")
 # Present while the panel's "Identify keys" runs: presses are reported, not acted on.
 IDENTIFY = os.path.join(HOME, ".cache/omarchy-tablet/identify")
 
@@ -400,8 +406,45 @@ def state_mtime():
         return 0
 
 
+async def apply_settings(reason):
+    proc = await asyncio.create_subprocess_exec(TABLET_CTL, "apply", stdout=asyncio.subprocess.DEVNULL,
+                                                stderr=asyncio.subprocess.PIPE)
+    _, err = await proc.communicate()
+    if proc.returncode:
+        log(f"apply ({reason}) failed:", err.decode(errors="replace").strip())
+    else:
+        log(f"settings applied ({reason})")
+
+
+async def watch_hyprland():
+    """Re-apply the settings after each Hyprland config reload or monitor change."""
+    sock = os.path.join(os.environ.get("XDG_RUNTIME_DIR", ""), "hypr",
+                        os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", ""), ".socket2.sock")
+    while True:
+        try:
+            reader, writer = await asyncio.open_unix_connection(sock)
+        except OSError as exc:
+            log("hyprland events:", exc)
+            await asyncio.sleep(5)
+            continue
+        try:
+            while line := await reader.readline():
+                if line.startswith((b"configreloaded>>", b"monitoradded", b"monitorremoved")):
+                    await asyncio.sleep(0.3)  # a reload often comes with monitor events: settle first
+                    await apply_settings(line.split(b">>")[0].decode())
+        finally:
+            writer.close()
+        await asyncio.sleep(1)
+
+
 async def main():
-    out = Outputs()
+    try:
+        out = Outputs()
+    except OSError as exc:
+        # No access to /dev/uinput: settings still get applied, remapping can't work.
+        log("cannot create virtual devices:", exc)
+        out = None
+    watcher = asyncio.create_task(watch_hyprland())  # noqa: F841  (kept alive for good)
     tasks = []
     signature = None
     while True:
@@ -418,15 +461,18 @@ async def main():
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            out.release_all()
+            if out:
+                out.release_all()
             tasks = []
             saved, slot_codes, rotation = load_state()
             buttons = {}
             if tablet:
                 key = f'{tablet["vendor"]}:{tablet["product"]}'
                 buttons = tabletlib.resolve_buttons(saved, tabletlib.describe(tablet, 0, slot_codes.get(key)))
-            pad, pen = open_device(pad_path), open_device(pen_path)
-            finger = open_device(finger_path) if rotation in (90, 270) else None
+            if current[1:] != (signature or (None,) * 4)[1:]:
+                await apply_settings("tablet seen")  # plugged in, or first run
+            pad, pen = (open_device(pad_path), open_device(pen_path)) if out else (None, None)
+            finger = open_device(finger_path) if out and rotation in (90, 270) else None
             if pad:
                 tasks.append(asyncio.create_task(run_pad(pad, buttons, out)))
             if pen:
