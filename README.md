@@ -39,18 +39,24 @@ support, key codes and key layout come from **libwacom**, already installed on
 every Omarchy system as a libinput dependency; the active-area size comes from
 the driver.
 
-| Family | Models | Notes |
-|---|---|---|
-| Bamboo Pen & Touch, Fun, SE | CTH-460/461/661 and (A)/SE variants | **Tested on a CTH-460(A).** 4 keys, touch |
-| Bamboo Capture, Create, 16FG | CTH-470/670, CTT-470 | 4 keys, touch |
-| Bamboo Touch | CTT-460/460(A) | touch and keys, no pen |
-| Bamboo Pen, Connect, One | CTL-460/660/470, CTF-430, CTE-660 | pen only |
-| Bamboo Fun / Pen (older) | CTE-450/650, MTE-450 | 4 keys along the top |
-| Bamboo Pad | CTH-300/301 | 2 keys, touch |
-| Intuos S/M, One by Wacom | CTL/CTH-480/490/680/690, CTL-4100/6100, CTL-471/472/671/672 | Intuos Pen & Touch 1st/2nd gen: run **Identify keys** once, libwacom doesn't record their key order |
+✅ = confirmed working on real hardware · ☐ = should work (checked against
+libwacom's data and with virtual devices), not tried yet
 
-Only the CTH-460(A) has been tried on real hardware; the others were checked
-against libwacom's data and with virtual devices. Reports are welcome.
+| | Family | Models | Notes |
+|---|---|---|---|
+| ✅ | Bamboo Pen & Touch, Fun, SE | CTH-460/461/661 and (A)/SE variants | CTH-460(A), the author's tablet: pen, touch, 4 keys, every orientation |
+| ✅ | Intuos5 | PTH-650 | [Reported by a user](https://github.com/mug31/omarchy-tablet/issues/1): every key recognised. 8 keys, touch; the touch ring isn't handled |
+| ☐ | Bamboo Capture, Create, 16FG | CTH-470/670, CTT-470 | 4 keys, touch |
+| ☐ | Bamboo Touch | CTT-460/460(A) | touch and keys, no pen |
+| ☐ | Bamboo Pen, Connect, One | CTL-460/660/470, CTF-430, CTE-660 | pen only |
+| ☐ | Bamboo Fun / Pen (older) | CTE-450/650, MTE-450 | 4 keys along the top |
+| ☐ | Bamboo Pad | CTH-300/301 | 2 keys, touch |
+| ☐ | Intuos S/M, One by Wacom | CTL/CTH-480/490/680/690, CTL-4100/6100, CTL-471/472/671/672 | Intuos Pen & Touch 1st/2nd gen: run **Identify keys** once, libwacom doesn't record their key order |
+
+Got it working on a model not ticked here, or found one that doesn't?
+[Open an issue](https://github.com/mug31/omarchy-tablet/issues) with the model
+number and it'll be added.
+
 Huion, XP-Pen and other brands use different drivers and are not supported.
 Touch rings and strips on pads are not handled.
 
