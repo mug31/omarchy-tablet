@@ -10,10 +10,18 @@ clicks, shortcuts or commands; keys still on "default" are replayed through a
 virtual clone with the same name, which libinput again treats as a tablet pad.
 Keys are named by the evdev code they send (BTN_RIGHT, BTN_0, ...).
 
-Pen: left alone while every side button is on "default". Once one is
-remapped, the real pen is grabbed and replayed through a virtual clone
-("<pen> Remap") so pressure and tilt keep working, with the remapped buttons
-swallowed and turned into their action instead.
+Pen: left alone while every side button is on "default" and the tablet is
+not turned a quarter. Otherwise the real pen is grabbed and replayed through a
+virtual clone ("<pen> Remap") so pressure and tilt keep working, with the
+remapped buttons swallowed and turned into their action instead.
+
+Quarter turns (90/270): Hyprland's tablet transform is a libinput calibration
+matrix, which libinput ignores on tablets without a screen, and libinput can't
+rotate the Wacom touch surface at all. So at 90/270 the daemon turns the axes
+itself: the pen clone and a "<finger> Rotated" clone send rotated coordinates.
+The two clones share a phys, so libinput groups them like the real pair and
+its pen/touch arbitration keeps working. Flipped (180) needs none of this:
+libinput's left-handed mode turns both pen and touch.
 
 Every press is also written to ~/.cache/omarchy-tablet/last-button so the
 bar panel can light up the button that was pressed.
@@ -85,9 +93,13 @@ def load_state():
         with open(STATE) as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return {}, {}
+        return {}, {}, 0
     buttons = {LEGACY_PAD.get(k, k): v for k, v in (data.get("buttons") or {}).items() if isinstance(v, dict)}
-    return buttons, data.get("slotCodes") or {}
+    try:
+        rotation = int(data.get("rotation", 0)) % 360 // 90 * 90
+    except (TypeError, ValueError):
+        rotation = 0
+    return buttons, data.get("slotCodes") or {}, rotation
 
 
 def identifying():
@@ -189,12 +201,62 @@ def open_device(path):
         return None
 
 
-def clone_of(dev, name):
+# Axis pairs turned together at 90/270.
+AXIS_PAIRS = [(e.ABS_X, e.ABS_Y), (e.ABS_TILT_X, e.ABS_TILT_Y),
+              (e.ABS_MT_POSITION_X, e.ABS_MT_POSITION_Y)]
+# Palm rejection fallback for the rotated touch: cut it while the pen hovers
+# and this long after it leaves.
+PEN_HOLD = 0.5
+pen_near = False
+pen_left = 0.0
+
+
+def turn(absinfo, rotation):
+    """{old code: (new code, value fn)} and the clone's absinfo for a quarter turn."""
+    remap, info = {}, dict(absinfo)
+    if rotation not in (90, 270):
+        return remap, info
+    same = lambda v: v  # noqa: E731
+    for x, y in AXIS_PAIRS:
+        if x not in absinfo or y not in absinfo:
+            continue
+        ax, ay = absinfo[x], absinfo[y]
+        if rotation == 90:  # x' = flipped y, y' = x
+            remap[y], remap[x] = (x, lambda v, a=ay: a.max + a.min - v), (y, same)
+        else:               # x' = y, y' = flipped x
+            remap[y], remap[x] = (x, same), (y, lambda v, a=ax: a.max + a.min - v)
+        info[x], info[y] = ay, ax
+    return remap, info
+
+
+def clone_of(dev, name, rotation=0):
+    """Virtual copy of `dev`, its axes turned by `rotation`. Returns (clone, remap)."""
     caps = dev.capabilities(absinfo=True)
     caps.pop(e.EV_SYN, None)
-    return evdev.UInput(caps, name=name, vendor=dev.info.vendor, product=dev.info.product,
-                        version=dev.info.version, bustype=dev.info.bustype,
-                        input_props=dev.input_props())
+    remap = {}
+    if e.EV_ABS in caps:
+        remap, info = turn(dict(caps[e.EV_ABS]), rotation)
+        caps[e.EV_ABS] = list(info.items())
+    clone = evdev.UInput(caps, name=name, vendor=dev.info.vendor, product=dev.info.product,
+                         version=dev.info.version, bustype=dev.info.bustype,
+                         input_props=dev.input_props())
+    return clone, remap
+
+
+def replay(clone, remap, ev):
+    if ev.type == e.EV_ABS and ev.code in remap:
+        code, fn = remap[ev.code]
+        clone.write(e.EV_ABS, code, fn(ev.value))
+    else:
+        clone.write_event(ev)
+
+
+def track_pen(ev):
+    global pen_near, pen_left
+    if ev.type == e.EV_KEY and ev.code in (e.BTN_TOOL_PEN, e.BTN_TOOL_RUBBER):
+        pen_near = ev.value == 1
+        if not pen_near:
+            pen_left = time.monotonic()
 
 
 async def run_pad(dev, buttons, out):
@@ -215,7 +277,7 @@ async def run_pad(dev, buttons, out):
 
     # The clone keeps the pad's exact name: udev only tags a device as a tablet
     # pad (ID_INPUT_TABLET_PAD) by name, and without that apps never see it.
-    clone = clone_of(dev, dev.name) if any(action(k) == "default" for k in keys) else None
+    clone = clone_of(dev, dev.name)[0] if any(action(k) == "default" for k in keys) else None
     dev.grab()
     try:
         async for ev in events(dev):
@@ -241,24 +303,26 @@ async def run_pad(dev, buttons, out):
         dev.close()
 
 
-async def run_pen(dev, buttons, out):
+async def run_pen(dev, buttons, out, rotation):
     names = tabletlib.PEN_BUTTONS
     remapped = {code for code, name in names.items()
                 if buttons.get(name, {}).get("action", "default") != "default"}
-    if not remapped:
+    if not remapped and rotation not in (90, 270):
         # Nothing to change: leave the real pen alone, only report presses for the panel.
         try:
             async for ev in events(dev):
+                track_pen(ev)
                 if ev.type == e.EV_KEY and ev.code in names:
                     mark(names[ev.code], ev.value == 1)
         finally:
             dev.close()
         return
 
-    clone = clone_of(dev, dev.name + tabletlib.REMAP_SUFFIX)
+    clone, remap = clone_of(dev, dev.name + tabletlib.REMAP_SUFFIX, rotation)
     dev.grab()
     try:
         async for ev in events(dev):
+            track_pen(ev)
             if ev.type == e.EV_KEY and ev.code in names:
                 name = names[ev.code]
                 mark(name, ev.value == 1)
@@ -266,7 +330,55 @@ async def run_pen(dev, buttons, out):
                     if ev.value in (0, 1):
                         out.press(name, buttons[name], ev.value == 1)
                     continue
-            clone.write_event(ev)
+            replay(clone, remap, ev)
+    finally:
+        try:
+            dev.ungrab()
+        except OSError:
+            pass
+        clone.close()
+        dev.close()
+
+
+async def run_finger(dev, rotation):
+    """Replay the touch surface turned a quarter, as "<finger> Rotated"."""
+    clone, remap = clone_of(dev, dev.name + tabletlib.ROTATED_SUFFIX, rotation)
+    dev.grab()
+    slots = {}       # slot -> tracking id, as the clone last saw it
+    slot = 0
+    touching = False
+    blocked = False
+
+    def lift_all():
+        for s, tid in list(slots.items()):
+            if tid != -1:
+                clone.write(e.EV_ABS, e.ABS_MT_SLOT, s)
+                clone.write(e.EV_ABS, e.ABS_MT_TRACKING_ID, -1)
+        slots.clear()
+        for k in (e.BTN_TOUCH, e.BTN_TOOL_FINGER, e.BTN_TOOL_DOUBLETAP):
+            clone.write(e.EV_KEY, k, 0)
+        clone.syn()
+
+    try:
+        async for ev in events(dev):
+            if ev.type == e.EV_KEY and ev.code == e.BTN_TOUCH:
+                touching = ev.value == 1
+            if ev.type == e.EV_ABS and ev.code == e.ABS_MT_SLOT:
+                slot = ev.value
+            if pen_near or time.monotonic() - pen_left < PEN_HOLD:
+                if not blocked:
+                    blocked = True
+                    lift_all()
+                continue
+            if blocked:
+                # A palm still resting once the pen left stays ignored until every finger lifts.
+                if ev.type == e.EV_SYN and not touching:
+                    blocked = False
+                    clone.write(e.EV_ABS, e.ABS_MT_SLOT, slot)  # lift_all moved the clone's slot
+                continue
+            if ev.type == e.EV_ABS and ev.code == e.ABS_MT_TRACKING_ID:
+                slots[slot] = ev.value
+            replay(clone, remap, ev)
     finally:
         try:
             dev.ungrab()
@@ -291,7 +403,8 @@ async def main():
         tablet = tabletlib.detect()
         pen_path = tablet["pen"]["path"] if tablet and tablet.get("pen") else None
         pad_path = tablet["pad"]["path"] if tablet and tablet.get("pad") else None
-        current = (state_mtime(), pen_path, pad_path)
+        finger_path = tablet["finger"]["path"] if tablet and tablet.get("finger") else None
+        current = (state_mtime(), pen_path, pad_path, finger_path)
         alive = all(not t.done() for t in tasks)
         if current != signature or not alive:
             for t in tasks:
@@ -299,18 +412,21 @@ async def main():
             await asyncio.gather(*tasks, return_exceptions=True)
             out.release_all()
             tasks = []
-            saved, slot_codes = load_state()
+            saved, slot_codes, rotation = load_state()
             buttons = {}
             if tablet:
                 key = f'{tablet["vendor"]}:{tablet["product"]}'
                 buttons = tabletlib.resolve_buttons(saved, tabletlib.describe(tablet, 0, slot_codes.get(key)))
             pad, pen = open_device(pad_path), open_device(pen_path)
+            finger = open_device(finger_path) if rotation in (90, 270) else None
             if pad:
                 tasks.append(asyncio.create_task(run_pad(pad, buttons, out)))
             if pen:
-                tasks.append(asyncio.create_task(run_pen(pen, buttons, out)))
+                tasks.append(asyncio.create_task(run_pen(pen, buttons, out, rotation)))
+            if finger:
+                tasks.append(asyncio.create_task(run_finger(finger, rotation)))
             log("tablet:", tablet["kernelName"] if tablet else "-",
-                "| pen" if pen else "| -", "pad" if pad else "-",
+                "| pen" if pen else "| -", "pad" if pad else "-", f"| rotation {rotation}",
                 "| pen remap:", [k for k in ("pen1", "pen2", "pen3")
                                  if buttons.get(k, {}).get("action", "default") != "default"])
             signature = current

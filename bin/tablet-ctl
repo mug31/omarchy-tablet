@@ -169,24 +169,33 @@ def render(s, a, size, pen, finger):
     # Flipping uses libinput's left-handed mode on the pen only: libinput turns
     # the paired Wacom touch surface with it. Setting left-handed on the touch
     # device as well can latch the pen upside down (see unlatch()). Quarter
-    # turns can only be done with Hyprland's transform, which moves the pen alone.
+    # turns are done by tablet-buttons, which replays the pen as "<pen> Remap"
+    # and the touch as "<finger> Rotated" with their axes already turned; the
+    # transform on the real pen only matters while that service isn't running.
     transform = {0: 0, 90: 1, 180: 0, 270: 3}[s["rotation"]]
+    quarter = s["rotation"] in (90, 270)
     flipped = s["rotation"] == 180
     full = a["w"] >= size[0] - 0.05 and a["h"] >= size[1] - 0.05
-    area_lines = "" if full else (
-        f'    active_area_size = "{a["w"]} {a["h"]}",\n'
-        f'    active_area_position = "{a["x"]} {a["y"]}",\n'
-    )
+
+    def area_lines(turned):
+        if full:
+            return ""
+        # The area is always centred, so turning it a quarter just swaps the axes.
+        w, h, x, y = (a["h"], a["w"], a["y"], a["x"]) if turned else (a["w"], a["h"], a["x"], a["y"])
+        return (f'    active_area_size = "{w} {h}",\n'
+                f'    active_area_position = "{x} {y}",\n')
+
     pressure_max = round(1.0 - s["pressure"] / 100 * 0.6, 3)
     blocks = []
     if pen:
-        for name in (pen, pen + "-remap"):  # tablet-buttons' clone while a pen button is remapped
+        # The real pen, then tablet-buttons' clone (pen buttons remapped or a quarter turn).
+        for name, turn, turned in ((pen, transform, False), (pen + "-remap", 0, quarter)):
             blocks.append(f"""hl.device({{
     name = "{name}",
     output = "{s["output"]}",
-    transform = {transform},
+    transform = {turn},
     left_handed = {lua_bool(flipped)},
-{area_lines}}})
+{area_lines(turned)}}})
 """)
         blocks.append(f"""hl.config({{
     input = {{
@@ -198,8 +207,9 @@ def render(s, a, size, pen, finger):
 }})
 """)
     if finger:
-        blocks.append(f"""hl.device({{
-    name = "{finger}",
+        for name in (finger, finger + "-rotated"):
+            blocks.append(f"""hl.device({{
+    name = "{name}",
     enabled = {lua_bool(s["fingerEnabled"])},
     left_handed = false,
     sensitivity = {s["fingerSpeed"]},
@@ -295,6 +305,13 @@ def service_active():
     return subprocess.run(["systemctl", "--user", "is-active", "--quiet", "tablet-buttons"]).returncode == 0
 
 
+def input_access(tablet):
+    """False when the tablet's event devices can't be read: the user isn't in
+    the input group, so remapping and quarter turns can't work."""
+    paths = [d["path"] for d in (tablet.get("pen"), tablet.get("pad"), tablet.get("finger")) if d] if tablet else []
+    return all(os.access(p, os.R_OK | os.W_OK) for p in paths)
+
+
 def evdev_available():
     return subprocess.run(["/usr/bin/python3", "-c", "import evdev"], capture_output=True).returncode == 0
 
@@ -355,6 +372,7 @@ def status(s, error=""):
         "buttonsService": service_active(),
         "setupDone": hyprland_wired() and os.path.exists(LUA) and os.path.exists(SERVICE),
         "evdev": evdev_available(),
+        "inputAccess": input_access(tablet),
         "wacomDriver": os.path.isdir("/sys/module/wacom"),
         "monitors": [{"name": m["name"], "description": m["description"]} for m in mons],
         "area": area(s, mons, size),

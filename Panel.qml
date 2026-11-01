@@ -23,6 +23,7 @@ Panel {
   property bool buttonsService: true
   property bool setupDone: true
   property bool evdevOk: true
+  property bool inputAccess: true
   property bool wacomDriver: true
   property string error: ""
   property var pendingPatch: null
@@ -144,6 +145,7 @@ Panel {
     buttonsService = data.buttonsService !== false
     setupDone = data.setupDone !== false
     evdevOk = data.evdev !== false
+    inputAccess = data.inputAccess !== false
     wacomDriver = data.wacomDriver !== false
     error = data.error || ""
     tablet = data.tablet || null
@@ -457,8 +459,8 @@ Panel {
             options: [
               { value: "0", label: "Normal" },
               { value: "180", label: "Flipped", tooltip: "Turned 180° for left-handed use" },
-              { value: "90", label: "90°", tooltip: "Portrait; touch doesn't follow" },
-              { value: "270", label: "270°", tooltip: "Portrait; touch doesn't follow" }
+              { value: "90", label: "90°", tooltip: "Portrait, turned clockwise" },
+              { value: "270", label: "270°", tooltip: "Portrait, turned counter-clockwise" }
             ]
             value: String(root.s("rotation", 0))
             foreground: root.fg
@@ -473,7 +475,9 @@ Panel {
               ? "Flipped for left-handed use: pen" + (root.hasTouch ? ", touch" : "") + " and the key order all turn around."
               : root.rotation_ === 0
                 ? "Left-handed? Turn the tablet around and pick Flipped."
-                : "Portrait: the pen turns" + (root.hasTouch ? "; finger touch keeps its normal direction." : ".")
+                : !root.buttonsService || !root.inputAccess
+                  ? "Portrait needs the tablet-buttons service to turn the pen" + (root.hasTouch ? " and touch" : "") + ", and it isn't running."
+                  : "Portrait: pen" + (root.hasTouch ? ", touch" : "") + " and the key order all turn with the tablet."
             color: root.dim
             font.family: root.uiFont
             font.pixelSize: Style.font.caption
@@ -596,10 +600,12 @@ Panel {
 
           Text {
             width: parent.width
-            text: root.buttonsService
-              ? "Press any pen or tablet button: its picture and row light up. App default leaves a button to the app you're in (Krita, Rnote…)."
-              : "The tablet-buttons service is not running, so mappings won't apply. Start it with: systemctl --user start tablet-buttons"
-            color: root.buttonsService ? root.dim : Color.urgent
+            text: !root.inputAccess
+              ? "Your user can't read the tablet's input devices, so mappings won't apply. Add yourself to the input group (sudo usermod -aG input $USER), then log out and back in."
+              : root.buttonsService
+                ? "Press any pen or tablet button: its picture and row light up. App default leaves a button to the app you're in (Krita, Rnote…)."
+                : "The tablet-buttons service is not running, so mappings won't apply. Start it with: systemctl --user start tablet-buttons"
+            color: root.buttonsService && root.inputAccess ? root.dim : Color.urgent
             font.family: root.uiFont
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap

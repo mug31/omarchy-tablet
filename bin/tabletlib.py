@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 LIBWACOM = "/usr/share/libwacom"
 WACOM_VENDORS = {"056a", "2d1f", "0531"}
 REMAP_SUFFIX = " Remap"  # tablet-buttons' virtual pen clone
+ROTATED_SUFFIX = " Rotated"  # tablet-buttons' turned touch clone at 90/270
 
 ABS_X, ABS_Y = 0x00, 0x01
 PEN_BUTTONS = {0x14B: "pen1", 0x14C: "pen2", 0x149: "pen3"}  # BTN_STYLUS, BTN_STYLUS2, BTN_STYLUS3
