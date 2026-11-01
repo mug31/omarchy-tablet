@@ -22,7 +22,6 @@ Panel {
   property bool fingerPresent: false
   property bool buttonsService: true
   property bool setupDone: true
-  property bool evdevOk: true
   property bool inputAccess: true
   property bool wacomDriver: true
   property string error: ""
@@ -144,7 +143,6 @@ Panel {
     fingerPresent = !!data.finger
     buttonsService = data.buttonsService !== false
     setupDone = data.setupDone !== false
-    evdevOk = data.evdev !== false
     inputAccess = data.inputAccess !== false
     wacomDriver = data.wacomDriver !== false
     error = data.error || ""
@@ -308,7 +306,7 @@ Panel {
   Timer { interval: root.opened ? 3000 : 15000; running: true; repeat: true; onTriggered: root.refresh() }
 
   // Hidden while no tablet is plugged in, unless setup still needs the panel.
-  visible: root.connected || !root.setupDone || !root.wacomDriver || !root.evdevOk
+  visible: root.connected || !root.setupDone || !root.wacomDriver
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -376,7 +374,7 @@ Panel {
 
         // First run / missing pieces.
         Column {
-          visible: !root.setupDone || !root.evdevOk || !root.wacomDriver
+          visible: !root.setupDone || !root.wacomDriver
           width: parent.width
           spacing: Style.space(8)
 
@@ -384,9 +382,7 @@ Panel {
             width: parent.width
             text: !root.wacomDriver
               ? "The kernel wacom driver isn't loaded, so the tablet can't be seen. OpenTabletDriver blocks it; see the plugin README."
-              : !root.evdevOk
-                ? "Button remapping needs python-evdev. Install it with: omarchy pkg add python-evdev"
-                : "One-time setup: adds hypr/tablet.lua to your Hyprland config and starts the tablet-buttons service."
+              : "One-time setup: adds hypr/tablet.lua to your Hyprland config and starts the tablet-buttons service."
             color: root.fg
             font.family: root.uiFont
             font.pixelSize: Style.font.caption
@@ -394,7 +390,7 @@ Panel {
           }
 
           Button {
-            visible: !root.setupDone && root.evdevOk
+            visible: !root.setupDone
             anchors.right: parent.right
             text: setupProc.running ? "Setting up…" : "Finish setup"
             iconText: "\uf0ad"

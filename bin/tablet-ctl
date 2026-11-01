@@ -312,10 +312,6 @@ def input_access(tablet):
     return all(os.access(p, os.R_OK | os.W_OK) for p in paths)
 
 
-def evdev_available():
-    return subprocess.run(["/usr/bin/python3", "-c", "import evdev"], capture_output=True).returncode == 0
-
-
 def setup(s):
     """Idempotent one-time install. tablet.lua is written before the require
     line goes in, so Hyprland never reloads into a missing module."""
@@ -371,7 +367,6 @@ def status(s, error=""):
         "finger": bool(desc and desc["hasTouch"]),
         "buttonsService": service_active(),
         "setupDone": hyprland_wired() and os.path.exists(LUA) and os.path.exists(SERVICE),
-        "evdev": evdev_available(),
         "inputAccess": input_access(tablet),
         "wacomDriver": os.path.isdir("/sys/module/wacom"),
         "monitors": [{"name": m["name"], "description": m["description"]} for m in mons],

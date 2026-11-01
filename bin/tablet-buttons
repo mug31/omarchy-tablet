@@ -33,17 +33,19 @@ import subprocess
 import sys
 import time
 
-import evdev
-from evdev import ecodes as e
-
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import tabletlib  # noqa: E402
+from evio import Device, UInput, ecodes as e  # noqa: E402
 
 HOME = os.path.expanduser("~")
 STATE = os.path.join(HOME, ".config/omarchy/tablet.json")
 LAST = os.path.join(HOME, ".cache/omarchy-tablet/last-button")
 # Present while the panel's "Identify keys" runs: presses are reported, not acted on.
 IDENTIFY = os.path.join(HOME, ".cache/omarchy-tablet/identify")
+
+# Every clone gets this phys, so libinput puts the pen and touch clones in one
+# device group and pairs them like the real tablet.
+PHYS = "omarchy-tablet/input0"
 
 LEGACY_PAD = {"pad1": "BTN_LEFT", "pad2": "BTN_FORWARD", "pad3": "BTN_BACK", "pad4": "BTN_RIGHT"}
 
@@ -125,8 +127,8 @@ class Outputs:
 
     def __init__(self):
         keys = list(range(e.KEY_ESC, e.KEY_MICMUTE + 1))
-        self.kbd = evdev.UInput({e.EV_KEY: keys}, name="Tablet Buttons Keyboard")
-        self.mouse = evdev.UInput(
+        self.kbd = UInput({e.EV_KEY: keys}, name="Tablet Buttons Keyboard")
+        self.mouse = UInput(
             {e.EV_KEY: list(CLICKS.values()), e.EV_REL: [e.REL_X, e.REL_Y, e.REL_WHEEL]},
             name="Tablet Buttons Mouse",
         )
@@ -165,8 +167,7 @@ class Outputs:
 
 
 async def events(dev):
-    """Events from `dev`. Replaces evdev's async_read_loop, whose futures raise
-    InvalidStateError when the task reading them is cancelled."""
+    """Events from `dev`, read as the event loop sees its fd become readable."""
     loop = asyncio.get_running_loop()
     queue = asyncio.Queue()
 
@@ -196,7 +197,7 @@ async def events(dev):
 
 def open_device(path):
     try:
-        return evdev.InputDevice(path) if path else None
+        return Device(path) if path else None
     except OSError:
         return None
 
@@ -231,15 +232,9 @@ def turn(absinfo, rotation):
 
 def clone_of(dev, name, rotation=0):
     """Virtual copy of `dev`, its axes turned by `rotation`. Returns (clone, remap)."""
-    caps = dev.capabilities(absinfo=True)
-    caps.pop(e.EV_SYN, None)
-    remap = {}
-    if e.EV_ABS in caps:
-        remap, info = turn(dict(caps[e.EV_ABS]), rotation)
-        caps[e.EV_ABS] = list(info.items())
-    clone = evdev.UInput(caps, name=name, vendor=dev.info.vendor, product=dev.info.product,
-                         version=dev.info.version, bustype=dev.info.bustype,
-                         input_props=dev.input_props())
+    remap, info = turn(dev.absinfo, rotation)
+    clone = UInput(dev.caps, name, absinfo=info, vendor=dev.vendor, product=dev.product,
+                   version=dev.version, bustype=dev.bustype, props=dev.props, phys=PHYS)
     return clone, remap
 
 
@@ -264,7 +259,7 @@ async def run_pad(dev, buttons, out):
         return buttons.get(name, {"action": "none"}).get("action", "none")
 
     keys = [tabletlib.KEY_NAMES.get(c, f"KEY_{c}")
-            for c in dev.capabilities().get(e.EV_KEY, []) if not 0x140 <= c <= 0x14F]
+            for c in dev.caps.get(e.EV_KEY, []) if not 0x140 <= c <= 0x14F]
     if all(action(k) == "default" for k in keys):
         # Nothing remapped: leave the pad to the apps, only report presses for the panel.
         try:
@@ -406,6 +401,9 @@ async def main():
         finger_path = tablet["finger"]["path"] if tablet and tablet.get("finger") else None
         current = (state_mtime(), pen_path, pad_path, finger_path)
         alive = all(not t.done() for t in tasks)
+        for t in tasks:
+            if t.done() and not t.cancelled() and t.exception() and not isinstance(t.exception(), OSError):
+                log("task failed:", repr(t.exception()))
         if current != signature or not alive:
             for t in tasks:
                 t.cancel()
