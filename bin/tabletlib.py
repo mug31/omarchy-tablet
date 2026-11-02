@@ -377,7 +377,8 @@ def describe(tablet, rotation=0, slot_codes=None):
     }
 
 
-ACTIONS = {"default", "left", "right", "middle", "key", "command", "none"}
+# "arealock" releases the pen from the app window it is locked to, or locks it again (tabletarea.py).
+ACTIONS = {"default", "left", "right", "middle", "key", "command", "arealock", "none"}
 # Fresh pad keys get these by position (first = top/leftmost with the tablet
 # held normally); further keys start disabled.
 PAD_DEFAULTS = [

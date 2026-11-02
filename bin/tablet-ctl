@@ -25,6 +25,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import tabletarea  # noqa: E402
 import tabletlib  # noqa: E402
 
 HOME = os.path.expanduser("~")
@@ -48,6 +49,10 @@ DEFAULTS = {
     "fingerSpeed": 0.0,       # -1..1
     "naturalScroll": True,
     "tapToClick": True,
+    "areaLock": False,        # lock the pen to the window of the apps below
+    "areaActivate": "button",  # "button": the arealock key locks the focused window; "hover": focus on a listed app does; "tap": a tap on one does
+    "apps": {},               # window class -> {"mode": "window"}
+    "ignoredApps": [],        # window classes the panel's app scan should not suggest
     "buttons": {},            # "pen1".."pen3" and pad key codes ("BTN_RIGHT") -> {action, value}
     "slotCodes": {},          # "vendor:product" -> {layout letter: code}, from Identify keys
     "lastDevice": {},         # names and size of the last tablet seen, for writing while unplugged
@@ -96,6 +101,10 @@ def sanitize(s):
     out["fingerSpeed"] = round(max(-1.0, min(1.0, float(s.get("fingerSpeed", 0)))), 2)
     out["naturalScroll"] = bool(s.get("naturalScroll"))
     out["tapToClick"] = bool(s.get("tapToClick"))
+    out["areaLock"] = bool(s.get("areaLock"))
+    out["areaActivate"] = s["areaActivate"] if s.get("areaActivate") in ("hover", "tap") else "button"
+    out["apps"] = {str(k)[:200]: {"mode": "window"} for k, v in (s.get("apps") or {}).items() if isinstance(v, dict)}
+    out["ignoredApps"] = [str(c)[:200] for c in (s.get("ignoredApps") or []) if isinstance(c, str)][:500]
     buttons = {}
     for key, spec in (s.get("buttons") or {}).items():
         if not isinstance(spec, dict):
@@ -278,7 +287,12 @@ def apply(s):
     return "" if out.returncode == 0 else (out.stdout + out.stderr).strip()
 
 
-def write(s):
+# Settings only tablet-buttons reads. Changing them leaves the Hyprland settings as they are,
+# so there is nothing to send; sending them again would also drop an area lock for a moment.
+SERVICE_ONLY = {"areaLock", "areaActivate", "apps", "ignoredApps"}
+
+
+def write(s, send=True):
     try:
         with open(STATE) as f:
             previous_rotation = json.load(f).get("rotation", 0)
@@ -291,7 +305,7 @@ def write(s):
     with open(tmp, "w") as f:
         json.dump(s, f, indent=2)
     os.replace(tmp, STATE)
-    error = apply(s)
+    error = apply(s) if send else ""
     if s["lastDevice"].get("finger") and previous_rotation != s["rotation"] and s["rotation"] != 180:
         spawn_unlatch()
     return error
@@ -393,6 +407,25 @@ def status(s, error=""):
     }
 
 
+def apps_report(s):
+    """What the Applications tab shows: scanned drawing apps and open windows.
+
+    Both lists are marked with what the user already decided, so the panel can hide the apps
+    that are listed or dismissed without asking again."""
+    listed = {c.lower() for c in s["apps"]}
+    ignored = {c.lower() for c in s["ignoredApps"]}
+    candidates = [dict(a, listed=a["class"].lower() in listed, ignored=a["class"].lower() in ignored)
+                  for a in tabletarea.installed_apps()]
+    seen = set()
+    windows = []
+    for c in hypr_json("clients") or []:
+        cls = c.get("class") or ""
+        if cls and cls.lower() not in seen:
+            seen.add(cls.lower())
+            windows.append({"class": cls, "title": c.get("title", ""), "listed": cls.lower() in listed})
+    return {"candidates": candidates, "windows": windows}
+
+
 def merge(s, patch):
     out = dict(s)
     for key, value in patch.items():
@@ -418,7 +451,7 @@ def main():
     if cmd == "set":
         patch = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
         s = sanitize(merge(s, patch))
-        error = write(s)
+        error = write(s, send=not set(patch) <= SERVICE_ONLY)
         s = load()
     elif cmd == "toggle":
         key = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -456,6 +489,9 @@ def main():
         finger = s["lastDevice"].get("finger")
         if finger and s["rotation"] != 180:
             unlatch(finger)
+        return
+    elif cmd == "apps":
+        print(json.dumps(apps_report(s)))
         return
     elif cmd != "status":
         print(__doc__, file=sys.stderr)

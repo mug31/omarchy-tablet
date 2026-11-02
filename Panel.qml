@@ -50,6 +50,7 @@ Panel {
     if (hasPen) opts.push({ value: "pen", label: "Pen", icon: "\uf040" })
     if (hasTouch) opts.push({ value: "touch", label: "Touch", icon: "\uf25a" })
     if (penButtons.length > 0 || slots.length > 0) opts.push({ value: "buttons", label: "Buttons", icon: "\uf11c" })
+    if (hasPen) opts.push({ value: "apps", label: "Applications", icon: "\uf2d0" })
     return opts
   }
 
@@ -74,6 +75,11 @@ Panel {
   }
   readonly property string helper: pluginDir + "/bin/tablet-ctl"
 
+  // How the area lock engages: "button" (default), "hover" or "tap".
+  readonly property string activateMode: {
+    var v = String(root.s("areaActivate", "button"))
+    return v === "hover" || v === "tap" ? v : "button"
+  }
   readonly property var penActions: [
     { value: "default", label: "App default" },
     { value: "left", label: "Left click" },
@@ -81,6 +87,7 @@ Panel {
     { value: "middle", label: "Middle click" },
     { value: "key", label: "Shortcut" },
     { value: "command", label: "Command" },
+    { value: "arealock", label: "Pen Area \uf023 / \uf09c" },
     { value: "none", label: "Disabled" }
   ]
   readonly property var padActions: penActions
@@ -129,6 +136,94 @@ Panel {
       opts.push({ value: m.name, label: brand || m.name, tooltip: m.name + " · " + m.description })
     }
     return opts
+  }
+
+  // ---- Applications tab ----
+  // What `tablet-ctl apps` found: drawing apps with a launcher and the windows open now.
+  // Scanned the first time the tab opens, and again on the Scan button.
+  property var appsReport: ({ candidates: [], windows: [] })
+  property bool appsScanned: false
+  property bool scanning: false
+  property bool showDismissed: false
+
+  function scanApps() {
+    if (appsProc.running) return
+    scanning = true
+    appsProc.running = true
+  }
+
+  function applyApps(raw) {
+    scanning = false
+    try { appsReport = JSON.parse(raw) } catch (e) { return }
+    appsScanned = true
+  }
+
+  onTabChanged: if (tab === "apps" && !appsScanned) scanApps()
+
+  function classKey(cls) { return String(cls).toLowerCase() }
+
+  function appList() {
+    return Object.keys(settings_.apps || {}).sort(function(a, b) {
+      return appName(a).toLowerCase() < appName(b).toLowerCase() ? -1 : 1
+    })
+  }
+
+  function isListed(cls) {
+    var apps = settings_.apps || {}
+    for (var k in apps) if (classKey(k) === classKey(cls)) return true
+    return false
+  }
+
+  function isDismissed(cls) {
+    var list = settings_.ignoredApps || []
+    for (var i = 0; i < list.length; i++) if (classKey(list[i]) === classKey(cls)) return true
+    return false
+  }
+
+  // The launcher's name for a window class, or the class itself when no launcher is known.
+  function appName(cls) {
+    var list = appsReport.candidates || []
+    for (var i = 0; i < list.length; i++) if (classKey(list[i].class) === classKey(cls)) return list[i].name
+    return cls
+  }
+
+  // Scanned apps that are not listed yet: the dismissed ones, or all the others.
+  function suggestions(dismissed) {
+    return (appsReport.candidates || []).filter(function(a) {
+      return !isListed(a.class) && isDismissed(a.class) === dismissed
+    })
+  }
+
+  function openWindowOptions() {
+    var opts = [{ value: "", label: "Choose a window…" }]
+    var list = appsReport.windows || []
+    for (var i = 0; i < list.length; i++) {
+      if (isListed(list[i].class)) continue
+      opts.push({ value: list[i].class, label: list[i].class, tooltip: list[i].title })
+    }
+    return opts
+  }
+
+  function addApp(cls) {
+    cls = String(cls).trim()
+    if (cls === "" || isListed(cls)) return
+    var apps = Object.assign({}, settings_.apps || {})
+    apps[cls] = { mode: "window" }
+    set("apps", apps)
+  }
+
+  function removeApp(cls) {
+    var apps = Object.assign({}, settings_.apps || {})
+    delete apps[cls]
+    set("apps", apps)
+  }
+
+  function dismissApp(cls) {
+    set("ignoredApps", (settings_.ignoredApps || []).concat([cls]))
+  }
+
+  function restoreApp(cls) {
+    set("ignoredApps", (settings_.ignoredApps || []).filter(function(c) { return classKey(c) !== classKey(cls) }))
   }
 
   function applyStatus(raw) {
@@ -221,6 +316,12 @@ Panel {
     id: statusProc
     command: [root.helper, "status"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyStatus(text) }
+  }
+
+  Process {
+    id: appsProc
+    command: [root.helper, "apps"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyApps(text) }
   }
 
   Process {
@@ -532,6 +633,53 @@ Panel {
             valueText: liveValue <= 0 ? "Normal" : "+" + Math.round(liveValue) + "%"
             onCommit: function(v) { root.set("pressure", Math.round(v)) }
           }
+
+          Header { text: "APP WINDOWS" }
+
+          SwitchRow {
+            label: "Lock pen to app windows"
+            tooltip: "In the apps of the Applications tab the pen covers just that app's window, with round circles. Everywhere else it keeps covering the whole desktop."
+            checked: root.s("areaLock", false) === true
+            onToggled: root.set("areaLock", !checked)
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(8)
+            enabled: root.s("areaLock", false) === true
+            opacity: enabled ? 1 : 0.4
+            Behavior on opacity { NumberAnimation { duration: 140 } }
+
+            Header { text: "ACTIVATE BY" }
+            ButtonGroup {
+              width: parent.width
+              spacing: Style.space(6)
+              focusable: false
+              options: [
+                { value: "button", label: "Button", tooltip: "A button you assign locks the pen to the app under the pen tip" },
+                { value: "hover", label: "Hover", tooltip: "Moving the pen over a listed app is enough. No click needed, but passing over the app locks the pen to it" },
+                { value: "tap", label: "Tap", tooltip: "Experimental: tap a listed app to lock to it. The tap can draw a dot, or a line" }
+              ]
+              value: root.activateMode
+              foreground: root.fg
+              fontFamily: root.uiFont
+              fontSize: Style.font.bodySmall
+              onChanged: function(v) { root.set("areaActivate", v) }
+            }
+
+            Text {
+              width: parent.width
+              text: root.activateMode === "button"
+                ? "Assign a button (Buttons tab, action Pen Area Lock/Unlock). Pressing it locks the pen to the app under the pen tip, and pressing it again releases the pen."
+                : root.activateMode === "hover"
+                  ? "The app is picked up as soon as the pen hovers over it, and the pen area is mapped to it. Release the lock with the mouse, or assign a button to Pen Area Lock/Unlock. Only apps of the Applications tab."
+                  : "EXPERIMENTAL. Tap an app of the Applications tab to activate the area lock. The tap can draw a dot, or a line."
+              color: root.dim
+              font.family: root.uiFont
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+          }
         }
 
         // ================= Touch =================
@@ -575,6 +723,190 @@ Panel {
               description: "Two-finger scroll moves the content, like a phone"
               checked: root.s("naturalScroll", true) === true
               onToggled: root.set("naturalScroll", !checked)
+            }
+          }
+        }
+
+        // ================= Applications =================
+        Column {
+          visible: root.tab === "apps" && root.hasPen
+          width: parent.width
+          spacing: Style.space(14)
+
+          // Dimmed while "Lock pen to app windows" is off, or in Button mode, which needs no list;
+          // the hover hint says what to change.
+          Item {
+            width: parent.width
+            height: appsBody.height
+
+            Column {
+              id: appsBody
+              width: parent.width
+              spacing: Style.space(14)
+              enabled: root.s("areaLock", false) === true && root.activateMode !== "button"
+              opacity: enabled ? 1 : 0.4
+              Behavior on opacity { NumberAnimation { duration: 140 } }
+
+              // An app that moves between YOUR APPS and SUGGESTIONS fades in at its new place
+              // while the rows around it slide, instead of jumping.
+              add: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 160 } }
+              move: Transition { NumberAnimation { property: "y"; duration: 160; easing.type: Easing.OutCubic } }
+
+              Header { text: "YOUR APPS" }
+
+              Text {
+                visible: root.appList().length === 0
+                width: parent.width
+                text: "No apps yet. Add one from the suggestions or an open window."
+                color: root.dim
+                font.family: root.uiFont
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              Repeater {
+                model: root.appList()
+                AppRow {
+                  title: root.appName(modelData)
+                  subtitle: modelData
+                  primaryIcon: "\uf00d"
+                  primaryTip: "Remove from the list"
+                  onPrimary: root.removeApp(modelData)
+                }
+              }
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(suggestionsHeader.implicitHeight, scanButton.implicitHeight)
+                height: implicitHeight
+
+                Header {
+                  id: suggestionsHeader
+                  text: "SUGGESTIONS"
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Button {
+                  id: scanButton
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.scanning ? "Scanning…" : "Scan for apps"
+                  iconText: "\uf021"
+                  tooltipText: "Look for installed drawing apps (the Graphics category of your app launcher)"
+                  bordered: true
+                  enabled: !root.scanning
+                  foreground: root.fg
+                  fontFamily: root.uiFont
+                  fontSize: Style.font.caption
+                  onClicked: root.scanApps()
+                }
+              }
+
+              Text {
+                visible: root.appsScanned && root.suggestions(false).length === 0
+                width: parent.width
+                text: "Nothing new found."
+                color: root.dim
+                font.family: root.uiFont
+                font.pixelSize: Style.font.caption
+              }
+
+              Repeater {
+                model: root.suggestions(false)
+                AppRow {
+                  title: modelData.name
+                  subtitle: modelData.class + (modelData.guessed ? " · class guessed" : "")
+                  primaryIcon: "\uf067"
+                  primaryTip: modelData.guessed
+                    ? "Add (the window class is a guess; use Add an open window if the lock doesn't engage)"
+                    : "Add to the list"
+                  secondaryIcon: "\uf00d"
+                  secondaryTip: "Don't suggest this app again"
+                  onPrimary: root.addApp(modelData.class)
+                  onSecondary: root.dismissApp(modelData.class)
+                }
+              }
+
+              Button {
+                visible: root.suggestions(true).length > 0
+                text: (root.showDismissed ? "Hide dismissed (" : "Show dismissed (") + root.suggestions(true).length + ")"
+                bordered: true
+                foreground: root.fg
+                fontFamily: root.uiFont
+                fontSize: Style.font.caption
+                onClicked: root.showDismissed = !root.showDismissed
+              }
+
+              Repeater {
+                model: root.showDismissed ? root.suggestions(true) : []
+                AppRow {
+                  title: modelData.name
+                  subtitle: modelData.class
+                  primaryIcon: "\uf0e2"
+                  primaryTip: "Suggest this app again"
+                  onPrimary: root.restoreApp(modelData.class)
+                }
+              }
+
+              Header { text: "ADD AN OPEN WINDOW" }
+
+              Dropdown {
+                width: parent.width
+                showLabel: false
+                options: root.openWindowOptions()
+                value: ""
+                foreground: root.fg
+                fontFamily: root.uiFont
+                onChanged: function(v) {
+                  if (v !== "") root.addApp(v)
+                }
+              }
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(classField.implicitHeight, addClassButton.implicitHeight)
+                height: implicitHeight
+
+                PlainField {
+                  id: classField
+                  anchors.left: parent.left
+                  anchors.right: addClassButton.left
+                  anchors.rightMargin: Style.space(6)
+                  anchors.verticalCenter: parent.verticalCenter
+                  placeholderText: "or type a window class"
+                }
+
+                Button {
+                  id: addClassButton
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  iconText: "\uf067"
+                  tooltipText: "Add this window class"
+                  bordered: true
+                  foreground: root.fg
+                  fontFamily: root.uiFont
+                  fontSize: Style.font.caption
+                  onClicked: {
+                    root.addApp(classField.text)
+                    classField.text = ""
+                  }
+                }
+              }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              visible: !appsBody.enabled
+              hoverEnabled: true
+
+              PanelToolTip {
+                visible: parent.containsMouse
+                text: root.s("areaLock", false) !== true
+                  ? "Turn on “Lock pen to app windows” in the Pen tab"
+                  : "Not used in Button mode: the button locks the window under the pen. Switch to Hover or Tap in the Pen tab to use this list."
+                fontFamily: root.uiFont
+              }
             }
           }
         }
@@ -743,6 +1075,7 @@ Panel {
     id: switchRow
     property string label: ""
     property string description: ""
+    property string tooltip: ""
     property bool checked: false
     signal toggled()
 
@@ -795,7 +1128,91 @@ Panel {
       anchors.top: parent.top
       anchors.bottom: parent.bottom
       cursorShape: Qt.PointingHandCursor
+      hoverEnabled: true
       onClicked: switchRow.toggled()
+
+      PanelToolTip {
+        visible: parent.containsMouse && switchRow.tooltip !== ""
+        text: switchRow.tooltip
+        fontFamily: root.uiFont
+      }
+    }
+  }
+
+  // One row of the Applications tab: the app's name with its window class underneath, and up
+  // to two icon buttons on the right (add / dismiss / remove / restore).
+  component AppRow: Item {
+    id: appRow
+    property string title: ""
+    property string subtitle: ""
+    property string primaryIcon: ""
+    property string primaryTip: ""
+    property string secondaryIcon: ""
+    property string secondaryTip: ""
+    signal primary()
+    signal secondary()
+
+    width: parent.width
+    implicitHeight: Math.max(texts.implicitHeight, Style.spacing.controlHeight)
+    height: implicitHeight
+
+    Column {
+      id: texts
+      anchors.left: parent.left
+      anchors.right: buttons.left
+      anchors.rightMargin: Style.space(8)
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.space(1)
+
+      Text {
+        textFormat: Text.PlainText
+        text: appRow.title
+        width: parent.width
+        elide: Text.ElideRight
+        color: root.fg
+        font.family: root.uiFont
+        font.pixelSize: Style.font.bodySmall
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        visible: appRow.subtitle !== ""
+        text: appRow.subtitle
+        width: parent.width
+        elide: Text.ElideRight
+        color: root.dim
+        font.family: root.uiFont
+        font.pixelSize: Style.font.caption
+      }
+    }
+
+    Row {
+      id: buttons
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.space(4)
+
+      Button {
+        visible: appRow.primaryIcon !== ""
+        iconText: appRow.primaryIcon
+        tooltipText: appRow.primaryTip
+        bordered: true
+        foreground: root.fg
+        fontFamily: root.uiFont
+        fontSize: Style.font.caption
+        onClicked: appRow.primary()
+      }
+
+      Button {
+        visible: appRow.secondaryIcon !== ""
+        iconText: appRow.secondaryIcon
+        tooltipText: appRow.secondaryTip
+        bordered: true
+        foreground: root.fg
+        fontFamily: root.uiFont
+        fontSize: Style.font.caption
+        onClicked: appRow.secondary()
+      }
     }
   }
 
@@ -1151,7 +1568,7 @@ Panel {
     // Size of the drawing once turned.
     readonly property real shownW: quarter ? ch : cw
     readonly property real shownH: quarter ? cw : ch
-    readonly property real k: Math.min(width / shownW, Style.space(150) / shownH)
+    readonly property real k: Math.min(width / shownW, Style.space(190) / shownH)
 
     implicitHeight: shownH * k + Style.space(4)
 

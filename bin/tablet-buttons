@@ -44,6 +44,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import tabletarea  # noqa: E402
 import tabletlib  # noqa: E402
 from evio import Device, UInput, ecodes as e  # noqa: E402
 
@@ -149,6 +150,7 @@ class Outputs:
             name="Tablet Buttons Mouse",
         )
         self.held = {}
+        self.area = None  # the AreaLock, set once it exists, for the "arealock" action
 
     def press(self, button, spec, down):
         action = spec.get("action", "none")
@@ -170,6 +172,8 @@ class Outputs:
                 for code in reversed(self.held.pop(button, [])):
                     self.kbd.write(e.EV_KEY, code, 0)
                 self.kbd.syn()
+        elif action == "arealock" and down and self.area:
+            self.area.toggle()
         elif action == "command" and down and value.strip():
             subprocess.Popen(["sh", "-c", value], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -314,18 +318,22 @@ async def run_pad(dev, buttons, out):
         dev.close()
 
 
-async def run_pen(dev, buttons, out, rotation):
+async def run_pen(dev, buttons, out, area, rotation):
     names = tabletlib.PEN_BUTTONS
     remapped = {code for code, name in names.items()
                 if buttons.get(name, {}).get("action", "default") != "default"}
     if not remapped and rotation not in (90, 270):
-        # Nothing to change: leave the real pen alone, only report presses for the panel.
+        # Nothing to change: leave the real pen alone, only report presses for the panel and
+        # tell the area lock when the tip touches and lifts (a tap engages the lock).
         try:
             async for ev in events(dev):
                 track_pen(ev)
-                if ev.type == e.EV_KEY and ev.code in names:
+                if ev.type == e.EV_KEY and ev.code == e.BTN_TOUCH:
+                    area.pen_touch(ev.value == 1)
+                elif ev.type == e.EV_KEY and ev.code in names:
                     mark(names[ev.code], ev.value == 1)
         finally:
+            area.pen_touch(False)
             dev.close()
         return
 
@@ -334,7 +342,9 @@ async def run_pen(dev, buttons, out, rotation):
     try:
         async for ev in events(dev):
             track_pen(ev)
-            if ev.type == e.EV_KEY and ev.code in names:
+            if ev.type == e.EV_KEY and ev.code == e.BTN_TOUCH:
+                area.pen_touch(ev.value == 1)
+            elif ev.type == e.EV_KEY and ev.code in names:
                 name = names[ev.code]
                 mark(name, ev.value == 1)
                 if ev.code in remapped:
@@ -343,6 +353,7 @@ async def run_pen(dev, buttons, out, rotation):
                     continue
             replay(clone, remap, ev)
     finally:
+        area.pen_touch(False)
         try:
             dev.ungrab()
         except OSError:
@@ -416,7 +427,7 @@ async def apply_settings(reason):
         log(f"settings applied ({reason})")
 
 
-async def watch_hyprland():
+async def watch_hyprland(area):
     """Re-apply the settings after each Hyprland config reload or monitor change."""
     sock = os.path.join(os.environ.get("XDG_RUNTIME_DIR", ""), "hypr",
                         os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", ""), ".socket2.sock")
@@ -432,6 +443,7 @@ async def watch_hyprland():
                 if line.startswith((b"configreloaded>>", b"monitoradded", b"monitorremoved")):
                     await asyncio.sleep(0.3)  # a reload often comes with monitor events: settle first
                     await apply_settings(line.split(b">>")[0].decode())
+                    area.reapply()  # the settings just sent reset the pen's area
         finally:
             writer.close()
         await asyncio.sleep(1)
@@ -439,9 +451,21 @@ async def watch_hyprland():
 
 async def main():
     out = None
-    watcher = asyncio.create_task(watch_hyprland())  # noqa: F841  (kept alive for good)
     tasks = []
     signature = None
+    lock = tabletarea.AreaLock()
+    watcher = asyncio.create_task(watch_hyprland(lock))  # noqa: F841  (kept alive for good)
+    area = asyncio.create_task(lock.run())
+    asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, asyncio.current_task().cancel)
+    try:
+        await watch(out, tasks, signature, lock)
+    finally:
+        # Cancelling lets the area lock hand the pen back before the service stops.
+        area.cancel()
+        await asyncio.gather(area, return_exceptions=True)
+
+
+async def watch(out, tasks, signature, area):
     while True:
         tablet = tabletlib.detect()
         pen_path = tablet["pen"]["path"] if tablet and tablet.get("pen") else None
@@ -452,6 +476,7 @@ async def main():
             # applied but nothing can be remapped or turned; keep trying.
             try:
                 out = Outputs()
+                out.area = area
             except OSError as exc:
                 if signature is None:
                     log("cannot create virtual devices:", exc)
@@ -480,7 +505,7 @@ async def main():
             if pad:
                 tasks.append(asyncio.create_task(run_pad(pad, buttons, out)))
             if pen:
-                tasks.append(asyncio.create_task(run_pen(pen, buttons, out, rotation)))
+                tasks.append(asyncio.create_task(run_pen(pen, buttons, out, area, rotation)))
             if finger:
                 tasks.append(asyncio.create_task(run_finger(finger, rotation)))
             log("tablet:", tablet["kernelName"] if tablet else "-",
