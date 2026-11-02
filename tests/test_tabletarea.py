@@ -109,10 +109,11 @@ class SettingsFile(unittest.TestCase):
     BASE = {"areaLock": True, "apps": {"Blender": {"mode": "window"}},
             "lastDevice": {"pen": "wacom-pen", "sizeMm": [223.5, 139.7]}}
 
-    def test_defaults_to_button_mode(self):
+    def test_defaults_are_button_without_ignoring(self):
         s = self.settings(self.BASE)
         self.assertTrue(s.lock)
         self.assertEqual(s.mode, "button")
+        self.assertFalse(s.ignore)
         self.assertEqual(s.apps, {"blender"})  # compared in lower case
 
     def test_modes_are_read(self):
@@ -129,13 +130,26 @@ class SettingsFile(unittest.TestCase):
         self.assertFalse(self.settings({**self.BASE, "rotation": 90}).lock)
         self.assertFalse(self.settings({**self.BASE, "areaLock": False}).lock)
 
+    def test_ignoring_taps_is_off_by_default_and_independent_of_the_lock(self):
+        self.assertFalse(self.settings(self.BASE).ignore)
+        # No lock, no apps, a quarter-turn tablet: ignoring taps does not depend on any of them.
+        s = self.settings({"ignoreTaps": True, "rotation": 90})
+        self.assertFalse(s.lock)
+        self.assertTrue(s.ignore)
+
+    def test_ignored_apps_start_as_the_file_managers_and_are_the_users_to_change(self):
+        s = self.settings({"ignoreTaps": True})
+        self.assertIn("org.gnome.nautilus", s.ignored)  # lower case, like the window class it is compared with
+        s = self.settings({"ignoreTaps": True, "tapIgnoredApps": ["MyApp"]})
+        self.assertEqual(s.ignored, {"myapp"})  # the list replaces the starting one, nothing stays built in
+
 
 class Pinned(unittest.IsolatedAsyncioTestCase):
     """Button mode: the key locks the pen to a window, and focus moving away does not release it."""
 
     def setUp(self):
         self.a = tabletarea.AreaLock()
-        self.a.settings = lambda: tabletarea.Settings(True, set(), "pen", PTH650, "button")
+        self.a.settings = lambda: tabletarea.Settings(True, set(), "pen", PTH650, "button", False, set())
         self.log = []
         self.clients = [{"address": "0xa", "class": "krita", "at": [0, 0], "size": [800, 600],
                          "mapped": True, "workspace": {"id": 1}},
@@ -185,6 +199,15 @@ class Pinned(unittest.IsolatedAsyncioTestCase):
         await self.a.evaluate()
         self.assertEqual(self.log, ["apply", "release", "apply", "release"])
         self.assertIsNone(self.a.pinned)
+
+    async def test_tap_guard_still_sees_the_focused_window_while_the_lock_is_pinned(self):
+        self.a.settings = lambda: tabletarea.Settings(True, set(), "pen", PTH650, "button", True, {"foot"})
+        await self.a.evaluate()
+        self.a.toggle()
+        self.focused = self.clients[1]  # the lock stays on krita while foot has focus
+        await self.a.evaluate()
+        self.assertEqual(self.log, ["apply"])
+        self.assertTrue(self.a.in_ignored)
 
     async def test_window_on_another_workspace_releases_it(self):
         await self.a.evaluate()

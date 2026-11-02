@@ -4,7 +4,8 @@ A bar widget for the [Omarchy](https://omarchy.org) shell that sets up a Wacom
 pen tablet from the bar: which display the pen draws on, orientation
 (including flipped for left-handed use), active area, pressure, finger touch,
 and what every pen and tablet button does. It can also lock the pen to the
-window of the drawing apps you choose.
+window of the drawing apps you choose, and stop the pen from moving files by
+accident in a file manager.
 
 <img src="preview.png" alt="Tablet panel: Pen and Buttons tabs" width="720">
 
@@ -13,6 +14,11 @@ window of the drawing apps you choose.
 
 <table>
 <tr>
+  <td align="center" valign="top">
+    <a href="ReadMe-Images/omarchy-tablet_MainTab.jpg"><img src="ReadMe-Images/omarchy-tablet_MainTab.jpg" alt="Pen tab" 
+width="180"></a><br>
+    <sub><strong>Pen Tab</strong></sub>
+  </td>
   <td align="center" valign="top">
     <a href="ReadMe-Images/omarchy-tablet_TouchTab.jpg"><img src="ReadMe-Images/omarchy-tablet_TouchTab.jpg" alt="Touch tab" 
 width="180"></a><br>
@@ -59,6 +65,8 @@ alt="Applications tab" width="180"></a><br>
 - **Applications** – the list of apps for the lock, filled from the drawing
   apps (Graphics category) found on the system, from the windows open now, or
   by typing a window class.
+- **Ignore Pen Taps** – optionally, the pen tip doesn't click in file managers, or any app listed there. In a file manager, a pen that touches down by accident can't pick up and move files or a folder.
+  The mouse and the pen's buttons still work there.
 - The panel adapts to the tablet that's plugged in: tabs and buttons it doesn't
   have are hidden, and the bar icon disappears while no tablet is connected.
   Changes apply instantly and survive reboots. Colours and fonts follow the
@@ -109,6 +117,20 @@ The list is used by **Hover** and **Tap**. In **Button** mode the tab is greyed 
 - **Add an open window** takes the window class from a window that is open now, which is the sure way for apps whose launcher doesn't name their class.
 - A window class can also be typed in. In a console find the app name using `hyprctl clients`.
 
+## IGNORE PEN TAPS
+
+<img src="ReadMe-Images/omarchy-tablet_MainTab_IgnorePenTaps-Active.jpg" alt="Ignore pen taps in these apps" width="416">
+
+**Ignore pen taps in these apps** (off by default) drops the pen's tip click while one of the listed apps has focus. The list starts with Nautilus, Thunar, Dolphin, Nemo, PCManFM, Caja, SpaceFM, Krusader, Double Commander, elementary Files and COSMIC Files; add any other app by its window class.
+
+The list is folded; click the arrow next to Apps to show it.
+
+- Switch the listed apps on or off by the toggle buttons. The default is switched on.
+- Add any app by its window class to the list.
+- To remove a manually defined app, click the "X".
+
+In a console find the app name using `hyprctl clients`.
+
 ## Settings in `tablet.json`
 
 All of this is set from the panel; the keys are listed for scripting.
@@ -119,6 +141,8 @@ All of this is set from the panel; the keys are listed for scripting.
 | `areaActivate`          | `"button"` (default), `"hover"` or `"tap"`.                          |
 | `apps`                  | Window class → `{"mode": "window"}`. Matched without regard to case. |
 | `ignoredApps`           | Classes the app scan no longer suggests.                             |
+| `ignoreTaps`            | Drop the pen tip's click in the apps below.                          |
+| `tapIgnoredApps`        | Window classes of those apps. Starts as the file managers.           |
 
 ## Supported hardware
 
@@ -195,10 +219,13 @@ Settings and button mappings carry over.
 | `bin/tabletlib.py` | Finds the tablet in `/proc/bus/input/devices` and reads its libwacom entry and layout. |
 | `bin/tablet-ctl` | Saves settings to `~/.config/omarchy/tablet.json` and sends them to Hyprland with `hyprctl eval`. |
 | `bin/tabletarea.py` | Runs inside `tablet-buttons`. Follows Hyprland's event socket and maps the pen onto a window with `region_position` / `region_size`, using the part of the tablet that has the window's aspect ratio. In Button mode the key locks the focused window and the lock stays on that window, whatever has focus, until the key is pressed again, the window closes or it leaves the screen; in Hover and Tap mode it is a listed app, and the pen is released when focus leaves. Also reads the installed launchers for the app scan. |
-| `bin/tablet-buttons` | Helper the panel keeps running (one per session; extra bars wait their turn). Re-applies the settings when the session starts, the tablet is plugged in, Hyprland reloads its config or a monitor changes. While any ExpressKey is remapped it grabs the pad and runs the actions through a virtual keyboard and mouse; keys left on App default are replayed through a virtual pad of the same name, so apps still see them. The pen is grabbed while a side button is remapped or the tablet is portrait, and replayed through a virtual clone (`… Pen Remap`) so pressure and tilt keep working; in portrait the finger touch is replayed turned (`… Finger Rotated`). Log: `~/.cache/omarchy-tablet/tablet-buttons.log`. |
+| `bin/tablet-buttons` | Helper the panel keeps running (one per session; extra bars wait their turn). Re-applies the settings when the session starts, the tablet is plugged in, Hyprland reloads its config or a monitor changes. While any ExpressKey is remapped it grabs the pad and runs the actions through a virtual keyboard and mouse; keys left on App default are replayed through a virtual pad of the same name, so apps still see them. The pen is grabbed while a side button is remapped, the tablet is portrait or taps are ignored, and replayed through a virtual clone (`… Pen Remap`) so pressure and tilt keep working; in portrait the finger touch is replayed turned (`… Finger Rotated`). Log: `~/.cache/omarchy-tablet/tablet-buttons.log`. |
 | `bin/evio.py` | Minimal evdev/uinput access (reading, grabbing, virtual devices) from the standard library. |
 
-The app settings are only read by `tablet-buttons`; changing
+The pen's pressure arrives before its touch in the same frame, so the helper
+looks at a whole frame before deciding whether to drop a tap in an app that ignores taps.
+
+The app and tap-guard settings are only read by `tablet-buttons`; changing
 them sends nothing to Hyprland.
 
 `python3 -m unittest discover tests` runs the checks for the window and

@@ -51,6 +51,8 @@ DEFAULTS = {
     "tapToClick": True,
     "areaLock": False,        # lock the pen to the window of the apps below
     "areaActivate": "button",  # "button": the arealock key locks the focused window; "hover": focus on a listed app does; "tap": a tap on one does
+    "ignoreTaps": False,      # the pen tip does not click in the apps below (no stray drags)
+    "tapIgnoredApps": list(tabletarea.TAP_IGNORED_DEFAULT),  # window classes; starts as the file managers
     "apps": {},               # window class -> {"mode": "window"}
     "ignoredApps": [],        # window classes the panel's app scan should not suggest
     "buttons": {},            # "pen1".."pen3" and pad key codes ("BTN_RIGHT") -> {action, value}
@@ -102,6 +104,8 @@ def sanitize(s):
     out["naturalScroll"] = bool(s.get("naturalScroll"))
     out["tapToClick"] = bool(s.get("tapToClick"))
     out["areaLock"] = bool(s.get("areaLock"))
+    out["ignoreTaps"] = bool(s.get("ignoreTaps"))
+    out["tapIgnoredApps"] = [str(c)[:200] for c in s.get("tapIgnoredApps", []) if isinstance(c, str)][:100]
     out["areaActivate"] = s["areaActivate"] if s.get("areaActivate") in ("hover", "tap") else "button"
     out["apps"] = {str(k)[:200]: {"mode": "window"} for k, v in (s.get("apps") or {}).items() if isinstance(v, dict)}
     out["ignoredApps"] = [str(c)[:200] for c in (s.get("ignoredApps") or []) if isinstance(c, str)][:500]
@@ -289,7 +293,7 @@ def apply(s):
 
 # Settings only tablet-buttons reads. Changing them leaves the Hyprland settings as they are,
 # so there is nothing to send; sending them again would also drop an area lock for a moment.
-SERVICE_ONLY = {"areaLock", "areaActivate", "apps", "ignoredApps"}
+SERVICE_ONLY = {"areaLock", "areaActivate", "ignoreTaps", "tapIgnoredApps", "apps", "ignoredApps"}
 
 
 def write(s, send=True):
