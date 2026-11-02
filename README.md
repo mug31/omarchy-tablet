@@ -86,7 +86,7 @@ Switch **Lock pen to app windows** on in the Pen tab, then choose how the lock s
 - **Tap** (experimental): tap a listed app and the pen locks to it as soon as it
   lifts. The tap itself still reaches the app, so it can draw a dot, or a line if
   you start painting at once as the area changes.
-- **Attention**: The pen is only released when focus moves to another window by either using super+tab to tab to another window, moving the mouse to another window, clicking or pressing the defined button on the pen or the tablet, or closing the app.
+- **Attention**: In **Hover** and **Tap** mode the pen is released when focus moves to another window by either using super+tab to tab to another window, moving the mouse to another window, clicking or pressing the defined button on the pen or the tablet, or closing the app. In Button mode it stays on its window until you press the key again, the window closes or it leaves the screen.
 
 - **Pro Tip** To leave the lock mode, when you are using the pen alone, set a tablet key or pen button to **Pen Area Lock/Unlock** in the Buttons tab: it releases the pen, and pressing it again locks the pen back onto the app in focus.
 
@@ -194,7 +194,7 @@ Settings and button mappings carry over.
 | `Panel.qml` | The bar icon and panel. Every change is sent to `bin/tablet-ctl`. |
 | `bin/tabletlib.py` | Finds the tablet in `/proc/bus/input/devices` and reads its libwacom entry and layout. |
 | `bin/tablet-ctl` | Saves settings to `~/.config/omarchy/tablet.json` and sends them to Hyprland with `hyprctl eval`. |
-| `bin/tabletarea.py` | Runs inside `tablet-buttons`. Follows Hyprland's event socket and maps the pen onto a window with `region_position` / `region_size`, using the part of the tablet that has the window's aspect ratio. In Button mode that is the window under the pen; in Hover and Tap mode it is a listed app. Releases the pen when focus leaves. Also reads the installed launchers for the app scan. |
+| `bin/tabletarea.py` | Runs inside `tablet-buttons`. Follows Hyprland's event socket and maps the pen onto a window with `region_position` / `region_size`, using the part of the tablet that has the window's aspect ratio. In Button mode the key locks the focused window and the lock stays on that window, whatever has focus, until the key is pressed again, the window closes or it leaves the screen; in Hover and Tap mode it is a listed app, and the pen is released when focus leaves. Also reads the installed launchers for the app scan. |
 | `bin/tablet-buttons` | Helper the panel keeps running (one per session; extra bars wait their turn). Re-applies the settings when the session starts, the tablet is plugged in, Hyprland reloads its config or a monitor changes. While any ExpressKey is remapped it grabs the pad and runs the actions through a virtual keyboard and mouse; keys left on App default are replayed through a virtual pad of the same name, so apps still see them. The pen is grabbed while a side button is remapped or the tablet is portrait, and replayed through a virtual clone (`… Pen Remap`) so pressure and tilt keep working; in portrait the finger touch is replayed turned (`… Finger Rotated`). Log: `~/.cache/omarchy-tablet/tablet-buttons.log`. |
 | `bin/evio.py` | Minimal evdev/uinput access (reading, grabbing, virtual devices) from the standard library. |
 
