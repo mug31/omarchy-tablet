@@ -218,6 +218,12 @@ sudo rm /etc/udev/rules.d/70-omarchy-wacom-bamboo.rules     # only if you presse
 The settings were only ever applied at runtime, so they are gone after the
 next Hyprland reload or login.
 
+## Contributing
+
+Issues and PRs are welcome. For anything bigger than a small fix, open an
+issue first so we can agree on the approach. Please leave version numbers to
+me, and mention which tablet you tested on.
+
 ## License
 
 MIT
