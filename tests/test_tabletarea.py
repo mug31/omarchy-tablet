@@ -160,6 +160,7 @@ class Pinned(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.a = tabletarea.AreaLock()
         self.a.settings = lambda: tabletarea.Settings(True, set(), "pen", PTH650, "button", False, set())
+        self.a.unsure = False  # these tests start from a pen known to be free
         self.log = []
         self.clients = [{"address": "0xa", "class": "krita", "at": [0, 0], "size": [800, 600],
                          "mapped": True, "workspace": {"id": 1}},
@@ -174,7 +175,7 @@ class Pinned(unittest.IsolatedAsyncioTestCase):
         async def apply(pen, options, quarter=False):
             self.log.append("apply")
 
-        async def release(pen=None):
+        async def release(pen=None, force=False):
             self.log.append("release")
             self.a.rect = None
 
@@ -270,3 +271,59 @@ class QuarterTurn(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(turned), 2)  # the unturned send, then the turned one that wins
         self.assertIn('active_area_size = "125.0 200.0"', turned[-1])
         self.assertIn('active_area_position = "7.3 11.5"', turned[-1])
+
+
+class RenderFullArea(unittest.TestCase):
+    """A full area is written out, turned for the clone, so no older area survives on a device."""
+
+    def render(self, rotation):
+        from importlib.machinery import SourceFileLoader
+        ctl = SourceFileLoader("tablet_ctl", os.path.join(os.path.dirname(__file__), "..", "bin", "tablet-ctl")).load_module()
+        s = {"rotation": rotation, "output": "", "pressure": 0, "fingerEnabled": True, "fingerSpeed": 0,
+             "naturalScroll": False, "tapToClick": True}
+        full = {"w": 223.5, "h": 139.7, "x": 0.0, "y": 0.0}
+        return ctl.render(s, full, (223.5, 139.7), "pen", None)
+
+    def test_upright_writes_the_full_area_to_both_devices(self):
+        text = self.render(0)
+        self.assertEqual(text.count('active_area_size = "223.5 139.7"'), 2)
+
+    def test_quarter_turn_writes_it_turned_for_the_clone_only(self):
+        for rotation in (90, 270):
+            text = self.render(rotation)
+            pen, clone = text.split('name = "pen-remap"')
+            self.assertIn('active_area_size = "223.5 139.7"', pen)
+            self.assertIn('active_area_size = "139.7 223.5"', clone)
+
+
+class ClearsAStaleLock(unittest.IsolatedAsyncioTestCase):
+    """A free pen is cleared once when the device may still hold an old lock, and not again after."""
+
+    def setUp(self):
+        self.a = tabletarea.AreaLock()
+        self.a.settings = lambda: tabletarea.Settings(False, set(), "pen", PTH650, "button", False, set())
+        self.calls = []
+
+        async def run_cmd(*args, timeout=5):
+            if args[0] == "hyprctl":
+                self.calls.append(args[-1])
+                return ""
+            return json.dumps({"area": {"w": 223.5, "h": 139.7, "x": 0, "y": 0}})
+
+        tabletarea.run_cmd, self.saved = run_cmd, tabletarea.run_cmd
+
+    def tearDown(self):
+        tabletarea.run_cmd = self.saved
+
+    async def test_first_look_clears_it_once(self):
+        await self.a._evaluate()
+        cleared = [c for c in self.calls if 'region_size = "0 0"' in c]
+        self.assertEqual(len(cleared), 2)  # the pen and its clone
+        await self.a._evaluate()
+        self.assertEqual(len([c for c in self.calls if 'region_size = "0 0"' in c]), 2)
+
+    async def test_a_settings_change_asks_for_another_clear(self):
+        await self.a._evaluate()
+        self.a.reapply()
+        await self.a._evaluate()
+        self.assertEqual(len([c for c in self.calls if 'region_size = "0 0"' in c]), 4)

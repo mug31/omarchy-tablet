@@ -121,6 +121,7 @@ Settings = namedtuple("Settings", "lock apps pen size mode ignore ignored quarte
 class AreaLock:
     def __init__(self):
         self.rect = None        # what the pen is locked to now, None = free
+        self.unsure = True      # the device may still hold a lock this process does not know about: clear it once
         self.tip_down = False   # the pen tip touches the tablet: the mapping must not change now
         self.tapped = False     # the tip lifted since the last look: that was a tap on the focused window
         self.focus = None       # class of the focused listed app, if any
@@ -202,6 +203,7 @@ class AreaLock:
     def reapply(self):
         """Something sent the pen's settings to Hyprland again, which drops the lock: apply it anew."""
         self.rect = None
+        self.unsure = True
         self.dirty.set()
 
     @staticmethod
@@ -260,7 +262,7 @@ class AreaLock:
             self.active = None  # focus left the app the tap activated
         if self.focus != self.hold:
             self.hold = None    # focus left the app the pen was released from
-        if want == self.rect:
+        if want == self.rect and not (want is None and self.unsure):
             return
         if self.tip_down:
             return  # a jump mid-stroke would draw a line; the lift asks again
@@ -275,7 +277,8 @@ class AreaLock:
             if self.rect is None:
                 log("locked to", name or window.get("class"))
         else:
-            await self.release(pen)
+            await self.release(pen, force=self.unsure)
+        self.unsure = False
         self.rect = want
 
     async def pinned_window(self):
@@ -300,9 +303,10 @@ class AreaLock:
         for name in ((pen + "-remap",) if quarter else (pen, pen + "-remap")):
             await run_cmd("hyprctl", "eval", f'hl.device({{ name = "{name}", {body} }})')
 
-    async def release(self, pen=None):
-        """Back to the mapping the settings describe, as `tablet-ctl status` reports it."""
-        if self.rect is None:
+    async def release(self, pen=None, force=False):
+        """Back to the mapping the settings describe, as `tablet-ctl status` reports it. Does nothing
+        when the pen is free, unless `force`: then it clears a lock the device may still hold."""
+        if self.rect is None and not force:
             return
         settings = self.settings()
         pen = pen or settings.pen
@@ -367,6 +371,7 @@ class AreaLock:
                         # which resets the pen's area: wait for that, then lock again.
                         await asyncio.sleep(0.5)
                         self.rect = None
+                        self.unsure = True
                 elif timed_out and not self.rect:
                     continue
                 self.mtime = mtime
