@@ -125,10 +125,20 @@ class SettingsFile(unittest.TestCase):
         self.assertTrue(self.settings({**self.BASE, "apps": {}}).lock)
         self.assertFalse(self.settings({**self.BASE, "apps": {}, "areaActivate": "tap"}).lock)
 
-    def test_lock_is_off_without_apps_or_while_rotated_a_quarter_turn(self):
+    def test_lock_is_off_without_apps_or_when_switched_off(self):
         self.assertFalse(self.settings({**self.BASE, "apps": {}, "areaActivate": "hover"}).lock)
-        self.assertFalse(self.settings({**self.BASE, "rotation": 90}).lock)
         self.assertFalse(self.settings({**self.BASE, "areaLock": False}).lock)
+
+    def test_a_quarter_turn_locks_on_the_swapped_tablet(self):
+        upright = self.settings(self.BASE)
+        self.assertFalse(upright.quarter)
+        self.assertEqual(list(upright.size), [223.5, 139.7])
+        for rotation in (90, 270):
+            s = self.settings({**self.BASE, "rotation": rotation})
+            self.assertTrue(s.lock)
+            self.assertTrue(s.quarter)
+            self.assertEqual(list(s.size), [139.7, 223.5])
+        self.assertFalse(self.settings({**self.BASE, "rotation": 180}).quarter)  # flipped needs no swap
 
     def test_ignoring_taps_is_off_by_default_and_independent_of_the_lock(self):
         self.assertFalse(self.settings(self.BASE).ignore)
@@ -161,7 +171,7 @@ class Pinned(unittest.IsolatedAsyncioTestCase):
             return json.dumps({"activewindow": self.focused, "clients": self.clients,
                                "monitors": [{"activeWorkspace": {"id": 1}, "specialWorkspace": {"id": 0}}]}[args[1]])
 
-        async def apply(pen, options):
+        async def apply(pen, options, quarter=False):
             self.log.append("apply")
 
         async def release(pen=None):
@@ -220,3 +230,43 @@ class Pinned(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuarterTurn(unittest.IsolatedAsyncioTestCase):
+    """At 90/270 the area goes to the turned clone only, and a release turns the area back."""
+
+    def setUp(self):
+        self.sent = []
+
+        async def run_cmd(*args, timeout=5):
+            if args[0] == "hyprctl":
+                self.sent.append(args[-1])
+                return ""
+            return json.dumps({"area": {"w": 200.0, "h": 125.0, "x": 11.5, "y": 7.3}})
+
+        tabletarea.run_cmd, self.saved = run_cmd, tabletarea.run_cmd
+
+    def tearDown(self):
+        tabletarea.run_cmd = self.saved
+
+    async def test_lock_is_sent_to_the_clone_only(self):
+        await tabletarea.AreaLock().apply("pen", {"region_size": "800 600"}, True)
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('name = "pen-remap"', self.sent[0])
+
+    async def test_upright_lock_goes_to_both_devices(self):
+        await tabletarea.AreaLock().apply("pen", {"region_size": "800 600"})
+        self.assertEqual(len(self.sent), 2)
+
+    async def test_release_swaps_the_area_for_the_clone(self):
+        a = tabletarea.AreaLock()
+        a.rect = (0, 0, 1, 1, 1, 1, 0, 0)
+        a.settings = lambda: tabletarea.Settings(True, set(), "pen", [139.7, 223.5], "button", False, set(), True)
+        await a.release()
+        real = [c for c in self.sent if 'name = "pen"' in c]
+        self.assertEqual(len(real), 1)
+        self.assertIn('active_area_size = "200.0 125.0"', real[0])
+        turned = [c for c in self.sent if 'name = "pen-remap"' in c]
+        self.assertEqual(len(turned), 2)  # the unturned send, then the turned one that wins
+        self.assertIn('active_area_size = "125.0 200.0"', turned[-1])
+        self.assertIn('active_area_position = "7.3 11.5"', turned[-1])

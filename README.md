@@ -100,7 +100,7 @@ Switch **Lock pen to app windows** on in the Pen tab, then choose how the lock s
 
 **General Notes**
 - While the pen is locked, a resized or moved window is followed and the pen motion is locked to that window.
-- The pointer jumps once when the lock engages, from where the pen was on the desktop to the same spot on the tablet inside the window. 90° and 270° orientations don't lock yet.
+- The pointer jumps once when the lock engages, from where the pen was on the desktop to the same spot on the tablet inside the window.
 
 ### The Applications tab
 

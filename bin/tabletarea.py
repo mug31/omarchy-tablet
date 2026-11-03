@@ -115,7 +115,7 @@ async def run_cmd(*args, timeout=5):
         return ""
 
 
-Settings = namedtuple("Settings", "lock apps pen size mode ignore ignored")
+Settings = namedtuple("Settings", "lock apps pen size mode ignore ignored quarter", defaults=(False,))
 
 
 class AreaLock:
@@ -141,7 +141,7 @@ class AreaLock:
             with open(STATE) as f:
                 data = json.load(f)
         except (OSError, ValueError):
-            return Settings(False, set(), None, None, "button", False, set())
+            return Settings(False, set(), None, None, "button", False, set(), False)
         last = data.get("lastDevice") or {}
         apps = {k.lower() for k, v in (data.get("apps") or {}).items()
                 if isinstance(v, dict) and v.get("mode", "window") == "window"}
@@ -151,11 +151,13 @@ class AreaLock:
         # The button locks any window, so it needs no app list.
         lock = data.get("areaLock") is True and (bool(apps) or mode == "button") \
             and bool(last.get("pen")) and bool(size)
-        # A quarter-turn tablet is not handled yet. Ignoring taps does not depend on the area.
-        if data.get("rotation", 0) in (90, 270):
-            lock = False
+        # A quarter-turn tablet is replayed as the pen clone with its axes swapped, so that is the
+        # tablet the area is worked out on: its width is the real height.
+        quarter = data.get("rotation", 0) in (90, 270)
+        if quarter and size:
+            size = [size[1], size[0]]
         ignored = {c.lower() for c in data.get("tapIgnoredApps", TAP_IGNORED_DEFAULT) if isinstance(c, str)}
-        return Settings(lock, apps, last.get("pen"), size, mode, data.get("ignoreTaps") is True, ignored)
+        return Settings(lock, apps, last.get("pen"), size, mode, data.get("ignoreTaps") is True, ignored, quarter)
 
     def swallows_taps(self):
         """True when the pen has to be routed through tablet-buttons' virtual pen so taps can be
@@ -221,7 +223,7 @@ class AreaLock:
             await self._evaluate()
 
     async def _evaluate(self):
-        lock, apps, pen, size, mode, ignore, ignored = self.settings()
+        lock, apps, pen, size, mode, ignore, ignored, quarter = self.settings()
         want = None
         window = {}
         self.focus = None
@@ -269,7 +271,7 @@ class AreaLock:
                 "region_position": f"{want[0]} {want[1]}",
                 "region_size": f"{want[2]} {want[3]}",
                 "absolute_region_position": "true",
-            })
+            }, quarter)
             if self.rect is None:
                 log("locked to", name or window.get("class"))
         else:
@@ -290,17 +292,20 @@ class AreaLock:
         shown |= {m.get("specialWorkspace", {}).get("id") for m in monitors}
         return window if window.get("workspace", {}).get("id") in shown else None
 
-    async def apply(self, pen, options):
+    async def apply(self, pen, options, quarter=False):
+        """Send `options` to the pen and to tablet-buttons' clone. At a quarter turn the options
+        are in the clone's turned frame and the real pen is grabbed, so only the clone gets them."""
         body = ", ".join(f'{k} = {v}' if v in ("true", "false") else f'{k} = "{v}"'
                          for k, v in options.items())
-        for name in (pen, pen + "-remap"):  # tablet-buttons' clone while a pen button is remapped
+        for name in ((pen + "-remap",) if quarter else (pen, pen + "-remap")):
             await run_cmd("hyprctl", "eval", f'hl.device({{ name = "{name}", {body} }})')
 
     async def release(self, pen=None):
         """Back to the mapping the settings describe, as `tablet-ctl status` reports it."""
         if self.rect is None:
             return
-        pen = pen or self.settings().pen
+        settings = self.settings()
+        pen = pen or settings.pen
         if not pen:
             return
         area = {}
@@ -316,6 +321,12 @@ class AreaLock:
             "absolute_region_position": "false",
         }
         await self.apply(pen, options)
+        if settings.quarter:
+            # The clone's axes are turned: the centred area only swaps width with height.
+            turned = {**options,
+                      "active_area_size": f'{area.get("h", 0)} {area.get("w", 0)}',
+                      "active_area_position": f'{area.get("y", 0)} {area.get("x", 0)}'}
+            await self.apply(pen, turned, True)
         self.rect = None
         log("released")
 
