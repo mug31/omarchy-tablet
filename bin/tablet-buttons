@@ -322,7 +322,7 @@ async def run_pen(dev, buttons, out, area, rotation):
     names = tabletlib.PEN_BUTTONS
     remapped = {code for code, name in names.items()
                 if buttons.get(name, {}).get("action", "default") != "default"}
-    if not remapped and rotation not in (90, 270):
+    if not remapped and rotation not in (90, 270) and not area.swallows_taps():
         # Nothing to change: leave the real pen alone, only report presses for the panel and
         # tell the area lock when the tip touches and lifts (a tap engages the lock).
         try:
@@ -339,19 +339,48 @@ async def run_pen(dev, buttons, out, area, rotation):
 
     clone, remap = clone_of(dev, dev.name + tabletlib.REMAP_SUFFIX, rotation)
     dev.grab()
+    swallow = False  # the tip is down on a tap in an app that ignores taps, which is dropped
+    ignore = area.ignores_taps()
+
+    def handle(ev):
+        nonlocal swallow
+        if ev.type == e.EV_KEY and ev.code == e.BTN_TOUCH:
+            if swallow:
+                swallow = ev.value != 0
+                return
+            area.pen_touch(ev.value == 1)
+        elif swallow and ev.type == e.EV_ABS and ev.code == e.ABS_PRESSURE:
+            clone.write(e.EV_ABS, e.ABS_PRESSURE, 0)
+            return
+        elif ev.type == e.EV_KEY and ev.code in (e.BTN_TOOL_PEN, e.BTN_TOOL_RUBBER) and ev.value == 0:
+            swallow = False
+        if ev.type == e.EV_KEY and ev.code in names:
+            name = names[ev.code]
+            mark(name, ev.value == 1)
+            if ev.code in remapped:
+                if ev.value in (0, 1):
+                    out.press(name, buttons[name], ev.value == 1)
+                return
+        replay(clone, remap, ev)
+
+    frame = []
     try:
         async for ev in events(dev):
             track_pen(ev)
-            if ev.type == e.EV_KEY and ev.code == e.BTN_TOUCH:
-                area.pen_touch(ev.value == 1)
-            elif ev.type == e.EV_KEY and ev.code in names:
-                name = names[ev.code]
-                mark(name, ev.value == 1)
-                if ev.code in remapped:
-                    if ev.value in (0, 1):
-                        out.press(name, buttons[name], ev.value == 1)
-                    continue
-            replay(clone, remap, ev)
+            frame.append(ev)
+            if ev.type != e.EV_SYN or ev.code != e.SYN_REPORT:
+                continue
+            # The kernel reports the pressure of a touch-down before its BTN_TOUCH, in the same
+            # frame, so the whole frame is looked at before any of it goes out.
+            if ignore and any(f.type == e.EV_KEY and f.code == e.BTN_TOUCH and f.value == 1 for f in frame):
+                if area.rect is None:
+                    # Focus follows the pen, so look again rather than trust a flag that may lag a tap.
+                    await area.evaluate()
+                if area.in_ignored:
+                    swallow = True  # an app that ignores taps has focus: the tap is dropped
+            for f in frame:
+                handle(f)
+            frame = []
     finally:
         area.pen_touch(False)
         try:
