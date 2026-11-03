@@ -196,10 +196,11 @@ def render(s, a, size, pen, finger):
     full = a["w"] >= size[0] - 0.05 and a["h"] >= size[1] - 0.05
 
     def area_lines(turned):
-        if full:
-            return ""
+        # A full area is written out too: leaving the lines off keeps whatever an earlier area, such
+        # as the unturned one the lock's release wrote, left on the device.
+        aw, ah, ax, ay = (size[0], size[1], 0, 0) if full else (a["w"], a["h"], a["x"], a["y"])
         # The area is always centred, so turning it a quarter just swaps the axes.
-        w, h, x, y = (a["h"], a["w"], a["y"], a["x"]) if turned else (a["w"], a["h"], a["x"], a["y"])
+        w, h, x, y = (ah, aw, ay, ax) if turned else (aw, ah, ax, ay)
         return (f'    active_area_size = "{w} {h}",\n'
                 f'    active_area_position = "{x} {y}",\n')
 
