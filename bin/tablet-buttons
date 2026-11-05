@@ -262,6 +262,11 @@ def replay(clone, remap, ev):
     if ev.type == e.EV_ABS and ev.code in remap:
         code, fn = remap[ev.code]
         clone.write(e.EV_ABS, code, fn(ev.value))
+    elif ev.type == e.EV_MSC and ev.code == e.MSC_SERIAL and ev.value:
+        # libinput shares one tool object between devices that report the same
+        # serial. The clone would share the grabbed real pen's tool, and the tip
+        # stops clicking, so it reports the serial with one bit flipped.
+        clone.write(e.EV_MSC, e.MSC_SERIAL, ev.value ^ 0x40000000)
     else:
         clone.write_event(ev)
 
@@ -337,8 +342,19 @@ async def run_pen(dev, buttons, out, area, rotation):
             dev.close()
         return
 
+    # Grabbing a hovering pen hides its leaving from libinput, which then keeps the
+    # pen in proximity for good: touch arbitration turns finger touch off and the
+    # tip stops clicking. Wait until the pen is away, then drop what queued meanwhile
+    # (libinput saw those events already).
+    while tabletlib.pen_in_proximity(dev.path):
+        await asyncio.sleep(0.25)
     clone, remap = clone_of(dev, dev.name + tabletlib.REMAP_SUFFIX, rotation)
     dev.grab()
+    try:
+        while dev.read():
+            pass
+    except BlockingIOError:
+        pass
     swallow = False  # the tip is down on a tap in an app that ignores taps, which is dropped
     ignore = area.ignores_taps()
 
