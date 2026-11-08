@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "io.github.mug31.wacom-bamboo",
   "name": "Wacom Bamboo",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "homepage": "https://github.com/mug31/omarchy-tablet",
   "author": "mug31",
   "license": "MIT",
-  "description": "Wacom tablet settings from the bar: target display, flipped and portrait orientation (pen and touch), active area, pressure, finger touch, and pen/ExpressKey remapping. No setup step. Adapts to Bamboo, Intuos and One by Wacom models via libwacom.",
+  "description": "Wacom tablet settings from the bar: target display, flipped and portrait orientation (pen and touch), active area, pressure, finger touch, pen/ExpressKey remapping, locking the pen to an app window, and ignoring pen taps in chosen apps. No setup step. Adapts to Bamboo, Intuos and One by Wacom models via libwacom.",
   "kinds": [
     "bar-widget"
   ],

@@ -162,6 +162,7 @@ libwacom's data and with virtual devices), not tried yet
 |---|---|---|---|
 | ✅ | Bamboo Pen & Touch, Fun, SE | CTH-460/461/661 and (A)/SE variants | CTH-460(A), the author's tablet: pen, touch, 4 keys, every orientation |
 | ✅ | Intuos5 | PTH-650 | [Reported by a user](https://github.com/mug31/omarchy-tablet/issues/1): every key recognised. 8 keys, touch; the touch ring isn't handled |
+| ✅ | Intuos Pro | PTH-451 | [Reported by a user](https://github.com/mug31/omarchy-tablet/issues/5): pen, touch and pen button remapping. The touch ring isn't handled |
 | ☐ | Bamboo Capture, Create, 16FG | CTH-470/670, CTT-470 | 4 keys, touch |
 | ☐ | Bamboo Touch | CTT-460/460(A) | touch and keys, no pen |
 | ☐ | Bamboo Pen, Connect, One | CTL-460/660/470, CTF-430, CTE-660 | pen only |
