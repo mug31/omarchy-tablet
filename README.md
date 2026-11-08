@@ -100,7 +100,8 @@ Switch **Lock pen to app windows** on in the Pen tab, then choose how the lock s
 
 **General Notes**
 - While the pen is locked, a resized or moved window is followed and the pen motion is locked to that window.
-- The pointer jumps once when the lock engages, from where the pen was on the desktop to the same spot on the tablet inside the window. 90° and 270° orientations don't lock yet.
+- The pointer jumps once when the lock engages, from where the pen was on the desktop to the same spot on the tablet inside the window.
+- At 90° and 270° the tablet is held portrait. A portrait window then fills most of the tablet, while a landscape window, such as a fullscreen app on a landscape monitor, uses a horizontal strip across the middle of it, so that circles stay round. Pen strokes beyond that strip hit the edge of the window.
 
 ### The Applications tab
 
@@ -130,6 +131,8 @@ The list is folded; click the arrow next to Apps to show it.
 - To remove a manually defined app, click the "X".
 
 In a console find the app name using `hyprctl clients`.
+
+**Palm rejection:** while this switch is on, the pen is replayed through a virtual clone (`… Pen Remap`). At Normal and Flipped, libinput then no longer pairs the pen with the real touch device, so palm rejection is weaker. A remapped pen button has the same limit. If it bothers you, switch Ignore pen taps off.
 
 ## Settings in `tablet.json`
 
